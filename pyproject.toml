@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiberphoto"
+version = "0.1.0"
+description = "Fiber photometry calcium-imaging analysis for TDMS recordings (batch core; GUI to follow)"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "pandas>=2.0",
+  "matplotlib>=3.7",
+  "h5py>=3.8",
+  "npTDMS>=1.7",
+  "oasis-deconv>=0.2",
+  "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5"]
+test = ["pytest>=7", "pytest-qt>=4"]
+
+[project.scripts]
+fiberphoto = "fiberphoto.cli:main"
+
+[project.gui-scripts]
+fiberphoto-gui = "fiberphoto.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"fiberphoto.gui" = ["manual/*.pdf"]

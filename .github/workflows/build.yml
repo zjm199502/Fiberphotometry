@@ -1,0 +1,41 @@
+# Builds the desktop app for Windows and macOS and runs the tests.
+# Download the zipped apps from the workflow run's "Artifacts" section.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[gui,test] pyinstaller
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+      - name: Build
+        run: pyinstaller packaging/fiberphoto.spec --noconfirm
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/fiberphoto -DestinationPath fiberphoto-windows.zip
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: cd dist && ditto -c -k --keepParent fiberphoto.app ../fiberphoto-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fiberphoto-${{ runner.os }}
+          path: fiberphoto-*.zip

@@ -1,0 +1,4 @@
+file,fs_raw_hz,fs_processed_hz,duration_s,dedrift_method,marker,n_markers,peth_n_trials,peth_peak_mean,peth_latency_mean_s,auc_pre_mean,auc_post_mean,auc_wilcoxon_p,events_n_events,events_duration_min,events_rate_per_min,events_mean_amplitude,events_median_iei_s,events_mean_half_width_s,events_noise_sigma,events_threshold,events_spike_sum,rate_pre_mean,rate_post_mean,rate_wilcoxon_p,error
+mouse01_session1,100,20,599.99,isosbestic,DI1_Stim,20,20,14.3835,1.0275,-0.0165294,31.8189,1.90735e-06,61,9.99917,6.10051,7.89648,6.85,1.06313,0.746165,2.7658,736.092,4.5,10.2,0.00581019,
+mouse02_session1,100,20,599.99,isosbestic,DI1_Stim,20,20,12.2182,1.4175,0.00552076,25.5752,1.90735e-06,59,9.99917,5.90049,6.54622,6.575,1.02333,0.729411,2.59789,605.667,3,10.5,0.00184658,
+mouse03_session1,100,20,599.99,isosbestic,DI1_Stim,20,20,4.74489,1.6525,-0.00528608,6.41758,6.29425e-05,75,9.99917,7.50063,5.08618,5.35,0.643093,0.688027,2.3525,602.316,6.9,9.3,0.276329,
