@@ -7,11 +7,11 @@ PyInstaller only builds for the system it runs on, so build the Windows app on W
 
 把整个项目推送到 GitHub 仓库后，`.github/workflows/build.yml` 会自动在 Windows 和 macOS 上运行测试并打包。
 在仓库的 **Actions** 页面打开最近一次运行，底部 **Artifacts** 里下载 Windows 安装程序（`FiberPhoto-<版本>-Windows-Setup.exe`，由 Inno Setup 生成）
-和 macOS 安装包（`FiberPhoto-<版本>-macOS-AppleSilicon.dmg` / `-Intel.dmg`）。
+和 macOS 安装包（`FiberPhoto-<版本>-macOS-AppleSilicon.dmg`，仅 M 系列芯片）。
 也可以在 Actions 页面点击 **Run workflow** 手动重新打包。
 
 Push the project to a GitHub repository; the workflow tests and builds a Windows Setup.exe (Inno Setup) and macOS
-.dmg files for Apple silicon and Intel. Download them from the run's **Artifacts** on the **Actions** page.
+.dmg for Apple silicon. Download them from the run's **Artifacts** on the **Actions** page.
 
 ## 方式二：在自己电脑上打包 / Building on your own computer
 
@@ -29,7 +29,6 @@ pyinstaller packaging/fiberphoto.spec --noconfirm
 - Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。把整个文件夹压缩成 zip 发给同学。
 - macOS: `dist/fiberphoto.app`。右键压缩成 zip 发给同学（同学第一次需右键 → 打开）。
 
-在 Mac 上要打包给 Intel 和 Apple 芯片两种电脑时，请分别在两种 Mac 上打包，或使用 GitHub Actions。
 
 ## 更新用户手册 / Updating the manual
 

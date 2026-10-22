@@ -40,16 +40,15 @@ data B and data C are always saved as backups (HDF5 + CSV), so you never need to
 
 ### macOS
 
-There are two installers; pick the one for your Mac’s chip ( menu → About This Mac → “Chip” or “Processor”):
-
-- Apple M1/M2/M3/M4 chips: `FiberPhoto-0.3.1-macOS-AppleSilicon.dmg`
-- Intel processors: `FiberPhoto-0.3.1-macOS-Intel.dmg`
+The installer is `FiberPhoto-0.3.1-macOS-AppleSilicon.dmg`, for Macs with Apple M-series chips (M1/M2/M3/M4;  menu → About This Mac → “Chip”). Intel Macs are not supported.
 
 1. Double-click the dmg and drag **FiberPhoto** onto the **Applications** folder in the window that opens.
 2. The first time, double-click FiberPhoto in Applications. If macOS says it cannot verify the developer, click **Done/Cancel**, open **System Settings → Privacy & Security**, click **Open Anyway** near the bottom and confirm with your password. After that it opens normally.
 3. If macOS says the app “is damaged and can’t be opened”, open Terminal, run the line below, and open the app again:
    `xattr -cr /Applications/FiberPhoto.app`
 
+> The installer contains everything the app needs; **you do not need to install Python or any libraries**.
+>
 > The app takes a few seconds to start. Please do not double-click it repeatedly.
 
 ## 3. The interface
