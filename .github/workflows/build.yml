@@ -1,5 +1,5 @@
 # Builds the desktop app for Windows and macOS and runs the tests.
-# Download the zipped apps from the workflow run's "Artifacts" section.
+# Produces a Windows Setup.exe and macOS .dmg installers; download them from the run's "Artifacts" section.
 name: build
 
 on:
@@ -11,8 +11,15 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            arch: x64
+          - os: macos-latest       # Apple silicon (M1 and newer)
+            arch: AppleSilicon
+          - os: macos-15-intel     # Intel Macs
+            arch: Intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +36,26 @@ jobs:
         run: pytest -q
       - name: Build
         run: pyinstaller packaging/fiberphoto.spec --noconfirm
-      - name: Zip (Windows)
+      - name: Version
+        shell: bash
+        run: echo "VER=$(python -c 'import fiberphoto; print(fiberphoto.__version__)')" >> "$GITHUB_ENV"
+      - name: Installer (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist/fiberphoto -DestinationPath fiberphoto-windows.zip
-      - name: Zip (macOS)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            if (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") {
+              $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+            } else {
+              choco install innosetup -y --no-progress
+              $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+            }
+          }
+          iscc /DAppVersion=$env:VER packaging\windows_installer.iss
+      - name: Installer (macOS)
         if: runner.os == 'macOS'
-        run: cd dist && ditto -c -k --keepParent fiberphoto.app ../fiberphoto-macos.zip
+        run: bash packaging/make_dmg.sh "$VER" "${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: fiberphoto-${{ runner.os }}
-          path: fiberphoto-*.zip
+          name: FiberPhoto-${{ env.VER }}-${{ runner.os }}-${{ matrix.arch }}
+          path: installer/*

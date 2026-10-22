@@ -33,16 +33,22 @@ data B and data C are always saved as backups (HDF5 + CSV), so you never need to
 
 ### Windows
 
-1. Unzip `fiberphoto-windows.zip` to get the `fiberphoto` folder (do **not** run it from inside the zip).
-2. Double-click `fiberphoto.exe` in that folder.
-3. If “Windows protected your PC” appears the first time, click **More info → Run anyway**. The app is not commercially signed; it is not a virus.
+1. Double-click `FiberPhoto-0.3.1-Windows-Setup.exe`.
+2. If “Windows protected your PC” appears, click **More info → Run anyway**. The app is not commercially signed; it is not a virus.
+3. Click **Next** through the installer (no administrator rights needed); tick “Create a desktop shortcut” if you like.
+4. Open **FiberPhoto** from the Start menu or desktop. The Start menu also has shortcuts to the manual. To uninstall: Settings → Apps → FiberPhoto → Uninstall.
 
 ### macOS
 
-1. Unzip `fiberphoto-macos.zip` and drag `fiberphoto.app` into Applications.
-2. The first time, **right-click (or Control-click) fiberphoto in Applications → Open → Open**.
+There are two installers; pick the one for your Mac’s chip ( menu → About This Mac → “Chip” or “Processor”):
+
+- Apple M1/M2/M3/M4 chips: `FiberPhoto-0.3.1-macOS-AppleSilicon.dmg`
+- Intel processors: `FiberPhoto-0.3.1-macOS-Intel.dmg`
+
+1. Double-click the dmg and drag **FiberPhoto** onto the **Applications** folder in the window that opens.
+2. The first time, double-click FiberPhoto in Applications. If macOS says it cannot verify the developer, click **Done/Cancel**, open **System Settings → Privacy & Security**, click **Open Anyway** near the bottom and confirm with your password. After that it opens normally.
 3. If macOS says the app “is damaged and can’t be opened”, open Terminal, run the line below, and open the app again:
-   `xattr -cr /Applications/fiberphoto.app`
+   `xattr -cr /Applications/FiberPhoto.app`
 
 > The app takes a few seconds to start. Please do not double-click it repeatedly.
 
