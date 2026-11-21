@@ -82,6 +82,52 @@ def test_doric_series_and_ttl_clock(tmp_path, store, channel):
     path.rename(tmp_path / "moved.doric")
 
 
+def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path):
+    from fiberphoto.data import save_stage, load_stage
+    from fiberphoto.gui.main_window import MainWindow
+
+    path = tmp_path / "rat.csv"
+    t = np.arange(1800) / 30
+    ratio = .02 * np.sin(t)
+    pd.DataFrame({"Frame": np.arange(len(t)) + 1, "time": t, "RawF_1": 55 + np.cos(t),
+                  " F0_1": 53., " R_1": ratio, "R_2": -ratio}).to_csv(path, index=False)
+    assert find_recordings(tmp_path) == [path]
+    window = MainWindow(lang="en")
+    qtbot.addWidget(window)
+    window.add_paths([path])
+    window.step_read()
+    qtbot.waitUntil(lambda: not window._busy, timeout=10000)
+    assert window.A.indicator == "GCaMP" and window.A.indicator_source == "default"
+    window.form_deconv.editors["enabled"].setChecked(False)
+    window.step_pre()
+    qtbot.waitUntil(lambda: not window._busy, timeout=10000)
+    assert window.B.unit == "ratio" and window.B.method == "Plexon R_1"
+    np.testing.assert_array_equal(window.A.exported_dff, window.B.dff)
+    np.testing.assert_allclose(window.B.dff, ratio, atol=1e-15)
+    np.testing.assert_allclose(window.B.reference, 53.)
+    h5 = save_stage(tmp_path / "record.h5", "A", window.A)
+    np.testing.assert_array_equal(load_stage(h5, "A").exported_dff, window.B.dff)
+    window.form_dedrift.editors["prefer_plexon_dff"].setChecked(False)
+    window.form_dedrift.editors["method"].setCurrentIndex(2)
+    window.step_pre()
+    qtbot.waitUntil(lambda: not window._busy, timeout=10000)
+    assert window.B.unit == "%" and window.B.method == "polynomial"
+    np.testing.assert_allclose(window.A.exported_dff, ratio, atol=1e-15)
+
+
+def test_match_plexon_ratio_and_indicator(tmp_path):
+    path = tmp_path / "two.csv"
+    pd.DataFrame({"time": np.arange(5), "RawF_465nm_F2_100pix": np.arange(5)+2,
+                  "R_465_F1": .8, "R_410_F2": .1, "R_465_F2": .2,
+                  "Indicator": "dLight1.3b"}).to_csv(path, index=False)
+    a = read_recording(path, ChannelConfig())
+    np.testing.assert_array_equal(a.exported_dff, [.2]*5)
+    assert a.channel_names["exported_dff"] == "R_465_F2"
+    assert (a.indicator, a.indicator_source) == ("dLight1.3b", "file")
+    override = read_recording(path, ChannelConfig(indicator="jRGECO1a"))
+    assert (override.indicator, override.indicator_source) == ("jRGECO1a", "user")
+
+
 def test_gui_import_plexon(qtbot, tmp_path):
     from fiberphoto.gui.main_window import MainWindow
     path, sim = plexon_file(tmp_path)

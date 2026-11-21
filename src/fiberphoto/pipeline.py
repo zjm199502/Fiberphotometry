@@ -107,6 +107,7 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s)
         summary = {"file": path.name, "fs_raw_hz": a.fs, "fs_processed_hz": b.fs,
                    "duration_s": float(a.time[-1] - a.time[0]),
+                   "indicator": a.indicator, "indicator_source": a.indicator_source, "dff_unit": b.unit,
                    "dedrift_method": b.method, "marker": marker, "n_markers": int(len(onsets))}
 
         if marker:
@@ -222,7 +223,8 @@ def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Pat
         sub = lambda x, k=k: progress((k + x) / max(len(files), 1))
         file_cfg = cfg
         if mapping_source and recording_family(f) != source_family:
-            file_cfg = replace(cfg, channels=ChannelConfig(marker_threshold=cfg.channels.marker_threshold))
+            file_cfg = replace(cfg, channels=ChannelConfig(marker_threshold=cfg.channels.marker_threshold,
+                                                           indicator=cfg.channels.indicator))
         results.append(run_file(f, file_cfg, out_root, log, sub))
     rows = [r.summary | {"file": r.name, "error": r.error} for r in results]
     if rows:

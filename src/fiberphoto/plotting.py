@@ -74,7 +74,7 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
     fig, axes = plt.subplots(nrow, 1, figsize=(10, 2.2 * nrow), sharex=True, squeeze=False)
     axes = axes[:, 0]
     axes[0].plot(a.time, a.signal, color=C_SIGNAL, lw=0.6)
-    axes[0].set_ylabel(tr("signal", lang))
+    axes[0].set_ylabel(f"{a.indicator}\n{tr('signal', lang)}")
     if a.control is not None:
         axes[1].plot(a.time, a.control, color=C_CONTROL, lw=0.6)
         axes[1].set_ylabel(tr("control", lang))
@@ -94,7 +94,8 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
 def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True)
     ax1.plot(b.time, b.signal, color=C_SIGNAL, lw=0.7, label=tr("signal", lang))
-    ax1.plot(b.time, b.reference, color=C_CONTROL, lw=1.2, label=tr("reference", lang))
+    if b.reference is not None:
+        ax1.plot(b.time, b.reference, color=C_CONTROL, lw=1.2, label=tr("reference", lang))
     ax1.set_ylabel(tr("fluor", lang))
     ax1.legend(loc="upper right", ncol=2)
     ax2.plot(b.time, b.dff, color=C_SIGNAL, lw=0.6)

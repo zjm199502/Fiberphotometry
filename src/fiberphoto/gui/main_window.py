@@ -215,6 +215,9 @@ class MainWindow(QMainWindow):
         f.addRow(self.lbl_map[0], self.cb_group)
         f.addRow(self.lbl_map[1], self.cb_signal)
         f.addRow(self.lbl_map[2], self.cb_control)
+        self.lbl_indicator = QLabel()
+        self.indicator_edit = QLineEdit()
+        f.addRow(self.lbl_indicator, self.indicator_edit)
         f.addRow(self.lbl_map[3], self.lst_markers)
         f.addRow(self.lbl_map[4], self.fs_edit)
         f.addRow(self.lbl_fs_missing)
@@ -244,6 +247,7 @@ class MainWindow(QMainWindow):
         lv = QVBoxLayout(left)
         self.box_dedrift = QGroupBox()
         self.form_dedrift = ParamForm(DEDRIFT)
+        self.form_dedrift.editors["prefer_plexon_dff"].toggled.connect(self._sync_dff_source)
         QVBoxLayout(self.box_dedrift).addWidget(self.form_dedrift)
         self.box_deconv = QGroupBox()
         self.form_deconv = ParamForm(DECONV)
@@ -453,6 +457,8 @@ class MainWindow(QMainWindow):
         for i, k in enumerate(("tab_read", "tab_pre", "tab_peth", "tab_events", "tab_export")):
             self.tabs.setTabText(i, t(k))
         self.help_read.setText(t("help_read"))
+        self.lbl_indicator.setText("荧光指示器" if self.lang == "zh" else "Fluorescent indicator")
+        self.indicator_edit.setPlaceholderText("自动读取，未注明时为 GCaMP" if self.lang == "zh" else "From file, otherwise GCaMP")
         self.help_pre.setText(t("help_pre"))
         self.help_peth.setText(t("help_peth"))
         self.help_events.setText(t("help_events"))
@@ -511,6 +517,15 @@ class MainWindow(QMainWindow):
             fv.set_placeholder(t("fig_empty"))
 
     # --------------------------------------------------------------- params
+    def _sync_dff_source(self):
+        form = self.form_dedrift
+        key = "prefer_plexon_dff"
+        direct = self.A is not None and self.A.exported_dff is not None and form.editors[key].isChecked()
+        for name, editor in form.editors.items():
+            if name != key:
+                editor.setVisible(not direct)
+                form.labels[name].setVisible(not direct)
+
     def forms_load(self):
         for f in (self.form_dedrift, self.form_deconv, self.form_peth, self.form_events):
             f.load(self.cfg)
@@ -522,6 +537,8 @@ class MainWindow(QMainWindow):
         self.chk_csv.setChecked(self.cfg.save_csv)
         ch = self.cfg.channels
         self.fs_edit.setValue(ch.sampling_rate)
+        self.indicator_edit.setText(ch.indicator)
+        self._sync_dff_source()
         self.marker_file.setText(ch.marker_file)
 
     def forms_store(self) -> PipelineConfig:
@@ -529,6 +546,7 @@ class MainWindow(QMainWindow):
             f.store(self.cfg)
         ch = self.cfg.channels
         ch.group = self.cb_group.currentText()
+        ch.indicator = self.indicator_edit.text().strip()
         ch.signal = self.cb_signal.currentText()
         ch.control = self.cb_control.currentData() or ""
         ch.auto_control = False
@@ -934,6 +952,7 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------- figures
     def redraw_all(self):
         """Rebuild every figure from the current results, in the interface language."""
+        self._sync_dff_source()
         lang = self.lang
         plotting.setup_style(lang)
         cfg = self.cfg

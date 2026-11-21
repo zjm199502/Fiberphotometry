@@ -7,6 +7,7 @@ data C  OASIS-denoised trace + inferred spikes (used for event detection)
 from __future__ import annotations
 
 import dataclasses
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,32 @@ class RawData:
     marker_offsets: dict[str, np.ndarray] = field(default_factory=dict)  # label -> offset times (s)
     source: str = ""
     channel_names: dict[str, str] = field(default_factory=dict)
+    exported_dff: Optional[np.ndarray] = None
+    exported_f0: Optional[np.ndarray] = None
+    indicator: str = "GCaMP"
+    indicator_source: str = "default"
+
+    def apply_indicator(self, override="", annotation=""):
+        if override.strip():
+            self.indicator, self.indicator_source = override.strip(), "user"
+        elif annotation:
+            self.indicator, self.indicator_source = annotation, "file"
+        else:
+            name = self.channel_names.get("signal", "")
+            match = re.search(r"(?:j?GCaMP|j?RGECO|RCaMP|dLight|GRAB|iGluSnFR)[\w.\-]*", name, re.I)
+            if match:
+                self.indicator, self.indicator_source = match[0], "channel"
+
+
+def indicator_annotation(*metadata):
+    for props in metadata:
+        for key, value in props.items():
+            if str(key).strip().lower() in {"indicator", "fluorophore", "fluorescent indicator", "指示器"}:
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8", errors="replace")
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
 
 
 @dataclass
@@ -36,7 +63,7 @@ class DffData:
     dff: np.ndarray
     fs: float
     signal: np.ndarray            # smoothed/downsampled signal the fit was done on
-    reference: np.ndarray         # fitted baseline (scaled control or drift curve)
+    reference: Optional[np.ndarray]  # fitted or device baseline when available
     method: str
     unit: str                     # "%" or "z"
     dff_unfiltered: Optional[np.ndarray] = None  # same ΔF/F without the low-pass, for deconvolution
@@ -117,5 +144,5 @@ def load_stage(path: str | Path, stage: str):
             elif cls.__dataclass_fields__[k].default is not dataclasses.MISSING:
                 continue  # field added later; older files fall back to its default
             else:
-                kw[k] = None if k == "control" else {}
+                kw[k] = None if k in ("control", "reference") else {}
     return cls(**kw)

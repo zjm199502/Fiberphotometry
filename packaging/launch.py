@@ -32,14 +32,14 @@ def verify_install(folder):
     if result.error or result.C is None or not len(result.peth.trials) or not result.figures:
         raise RuntimeError(result.error or "Incomplete analysis")
     export = folder / "sample_PhotoData.csv"
-    pd.DataFrame({"timestamp": result.A.time, "RawF_465_F1": result.A.signal,
-                  "RawF_410_F1": result.A.control}).to_csv(export, index=False)
+    ratio = result.A.signal / result.A.signal.mean() - 1
+    pd.DataFrame({"time": result.A.time, "RawF_1": result.A.signal, "R_1": ratio}).to_csv(export, index=False)
     window.add_paths([export])
     window.file_list.setCurrentRow(1)
-    if window.cb_signal.currentText() != "RawF_465_F1":
+    if window.cb_signal.currentText() != "RawF_1":
         raise RuntimeError("Plexon channel mapping failed")
     imported = run_file(export, cfg, folder / "plexon-results")
-    if imported.error or imported.C is None:
+    if imported.error or imported.C is None or imported.B.method != "Plexon R_1":
         raise RuntimeError(imported.error or "Incomplete Plexon analysis")
     window.close()
 

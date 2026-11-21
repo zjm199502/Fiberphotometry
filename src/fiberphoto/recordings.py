@@ -11,11 +11,11 @@ import numpy as np
 import pandas as pd
 
 from .config import ChannelConfig
-from .data import RawData
+from .data import RawData, indicator_annotation
 from .io_tdms import (ChannelInfo, auto_map, detect_edges, inspect_tdms, is_event_file,
                       read_marker_csv, read_marker_tdms, read_tdms)
 
-RAW_F = re.compile(r"RawF_(\d+)(?:nm)?_(F\d+)(?:_\d+pix)?", re.I)
+PLEXON_COLUMN = re.compile(r"(RawF|F0|R)_(?:(\d+)(?:nm)?_F)?(\d+)(?:_\d+pix)?", re.I)
 ROI = re.compile(r"(?:Region|Channel)\d+[GR]?", re.I)
 DIGITAL = re.compile(r"(?:Stim(?:ulation|_.*)?|TTL.*|DI\d+|DIO\d+|Event.*|Input\d+|Output\d+)", re.I)
 CLOCK = re.compile(r"(?:time|timestamp|systemtimestamp)(?:\s*\((s|ms|us)\))?", re.I)
@@ -28,6 +28,10 @@ class Trace:
     role: str
     time: np.ndarray
     values: np.ndarray
+    indicator: str = ""
+    ratio_name: str = ""
+    ratio: np.ndarray | None = None
+    baseline: np.ndarray | None = None
 
     def info(self):
         steps = np.diff(self.time)
@@ -39,7 +43,7 @@ class Trace:
 
 
 def _csv_layout(columns):
-    if any(RAW_F.fullmatch(c) for c in columns):
+    if any(c.lower().startswith("rawf_") and PLEXON_COLUMN.fullmatch(c) for c in columns):
         return "plexon"
     if any(c.lower() in ("flags", "ledstate") for c in columns) and any(ROI.fullmatch(c) for c in columns):
         return "npm"
@@ -88,11 +92,26 @@ def _csv_traces(path):
         raise ValueError(f"Invalid or non-increasing clock: {clock}")
     traces = []
     if layout == "plexon":
+        columns = {}
         for name in frame:
-            m = RAW_F.fullmatch(name)
+            m = PLEXON_COLUMN.fullmatch(name)
             if m:
-                role = "control" if m[1] in ("405", "410", "415") else "signal"
-                traces.append(Trace(m[2].upper(), name, role, time, frame[name].to_numpy(float)))
+                key = (m[2], m[3], m[1].lower())
+                if key in columns:
+                    raise ValueError(f"Ambiguous Plexon columns: {columns[key]}, {name}")
+                columns[key] = name
+        for (wave, fiber, kind), name in columns.items():
+            if kind != "rawf":
+                continue
+            role = "control" if wave in ("405", "410", "415") else "signal"
+            trace = Trace(f"F{fiber}", name, role, time, frame[name].to_numpy(float))
+            trace.ratio_name = columns.get((wave, fiber, "r"), "")
+            if trace.ratio_name:
+                trace.ratio = pd.to_numeric(frame[trace.ratio_name], errors="coerce").to_numpy(float)
+            baseline = columns.get((wave, fiber, "f0"))
+            if baseline:
+                trace.baseline = pd.to_numeric(frame[baseline], errors="coerce").to_numpy(float)
+            traces.append(trace)
     else:
         state_col = next(c for c in frame if c.lower() in ("ledstate", "flags"))
         flags = frame[state_col].to_numpy(float)
@@ -110,6 +129,13 @@ def _csv_traces(path):
                 rows = (flags & bit) != 0
                 if rows.any():
                     traces.append(Trace(name, f"{wave}nm", role, time[rows], frame.loc[rows, name].to_numpy(float)))
+    for column in frame:
+        if indicator_annotation({column: "label"}):
+            labels = frame[column].dropna().astype(str).str.strip().unique()
+            if len(labels) == 1:
+                for trace in traces:
+                    trace.indicator = labels[0]
+                break
     groups = list(dict.fromkeys(t.group for t in traces))
     if layout == "npm":
         # Expose changing upper bits by index, without assigning a device-specific TTL label.
@@ -148,7 +174,8 @@ def _doric_traces(path):
                 if not re.fullmatch(r"Values?|AIN\d+|DIO\d+", name, re.I):
                     continue
                 traces.append(Trace(f"{device}/{series}", f"{store}:{name}",
-                                    "marker" if digital else "", time, np.asarray(ds, dtype=float).squeeze()))
+                                    "marker" if digital else "", time, np.asarray(ds, dtype=float).squeeze(),
+                                    indicator_annotation(ds.attrs, node.attrs, node.parent.attrs, f.attrs)))
         f["DataAcquisition"].visititems(collect)
     return traces
 
@@ -229,5 +256,11 @@ def read_recording(path, cfg: ChannelConfig):
             on, off = read_marker_csv(cfg.marker_file)
         markers.update(on)
         offsets.update(off)
-    return RawData(time, values, control, fs, markers, offsets, str(path),
-                   {"group": mapped.group, "signal": mapped.signal, "control": mapped.control, "time": "seconds"})
+    raw = RawData(time, values, control, fs, markers, offsets, str(path),
+                  {"group": mapped.group, "signal": mapped.signal, "control": mapped.control, "time": "seconds"})
+    raw.apply_indicator(cfg.indicator, signal.indicator)
+    if signal.ratio is not None:
+        raw.exported_dff = signal.ratio
+        raw.channel_names["exported_dff"] = signal.ratio_name
+    raw.exported_f0 = signal.baseline
+    return raw

@@ -11,7 +11,7 @@ import pandas as pd
 from nptdms import TdmsFile
 
 from .config import ChannelConfig
-from .data import RawData
+from .data import RawData, indicator_annotation
 
 SIGNAL_PAT = re.compile(r"(470|465|473|490|488|gcamp|signal|ca2?\+?|green)", re.I)
 CONTROL_PAT = re.compile(r"(405|410|415|iso|control|ref|uv|violet)", re.I)
@@ -289,7 +289,9 @@ def read_tdms(path: str | Path, cfg: ChannelConfig) -> RawData:
         markers.update(m_on)
         offsets.update(m_off)
 
-    return RawData(time=time, signal=signal, control=control, fs=float(fs),
+    raw = RawData(time=time, signal=signal, control=control, fs=float(fs),
                    markers=markers, marker_offsets=offsets, source=str(path),
                    channel_names={"group": cfg.group, "signal": cfg.signal,
                                   "control": cfg.control or "", "time": cfg.time or ""})
+    raw.apply_indicator(cfg.indicator, indicator_annotation(sig_ch.properties, g.properties, f.properties))
+    return raw

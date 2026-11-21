@@ -98,6 +98,11 @@ def detect_led_onset(sig: np.ndarray, fs: float, ratio: float = 0.6) -> float:
 
 def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
     t, sig, ctl, fs = raw.time, raw.signal, raw.control, raw.fs
+    if cfg.prefer_plexon_dff and raw.exported_dff is not None:
+        if not np.isfinite(raw.exported_dff).all():
+            raise ValueError("Invalid Plexon R values; select raw recalculation / R 列含无效值，请选择从原始荧光重算")
+        return DffData(t, raw.exported_dff.copy(), fs, sig, raw.exported_f0,
+                       f"Plexon {raw.channel_names['exported_dff']}", "ratio")
     trim_start = cfg.trim_start_s
     if cfg.auto_trim:
         onset = detect_led_onset(sig, fs)

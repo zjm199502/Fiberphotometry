@@ -23,6 +23,7 @@ class ChannelConfig:
     marker_threshold: Optional[float] = None  # TTL threshold; None = midpoint of range
     marker_file: str = ""           # optional CSV/Excel or marker TDMS; "" = auto-pair <name>-Event.tdms
     auto_control: bool = True       # infer a reference only until an explicit GUI choice
+    indicator: str = ""             # explicit override; otherwise read the label or assume GCaMP
 
 
 @dataclass
@@ -36,7 +37,8 @@ class DedriftConfig:
     auto_trim: bool = True          # detect and drop an initial stretch with the LED still off
     trim_start_s: float = 0.0       # drop LED warm-up at the start
     trim_end_s: float = 0.0
-    output: str = "dff"             # "dff" (%) or "zscore"
+    output: str = "dff"             # "dff" (%) or "zscore" for recomputed traces
+    prefer_plexon_dff: bool = True  # use the exported ratio at its original timestamps
 
 
 @dataclass

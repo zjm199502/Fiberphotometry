@@ -188,6 +188,9 @@ def L(zh: str, en: str) -> dict:
 
 
 DEDRIFT = [
+    ParamSpec("dedrift", "prefer_plexon_dff", "bool", L("优先使用 Plexon 的 R 列", "Prefer Plexon R column"),
+              L("有匹配 R 列时直接用原始比值和原始时间轴。取消勾选后，按下方参数从 RawF 重算 ΔF/F。",
+                "Use the exported ratio and original timestamps when available. Uncheck to recalculate from RawF using the settings below.")),
     ParamSpec("dedrift", "method", "choice", L("去漂移方法", "Method"),
               L("isosbestic：用 405 nm 对照通道拟合并扣除漂移和运动伪迹（推荐，需要对照通道）。\n"
                 "双指数：用双指数曲线拟合光漂白，适合没有对照通道的数据。\n"
