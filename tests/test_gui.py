@@ -18,6 +18,7 @@ def window(qtbot, tmp_path, monkeypatch):
     shown = []
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a))
     monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
     w = MainWindow(lang="zh")
     qtbot.addWidget(w)
     w.shown = shown
@@ -144,6 +145,7 @@ def test_unnamed_channels_without_rate(qtbot, tmp_path, monkeypatch):
 
     shown = []
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a[2]))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
     sim = simulate(duration_s=120, fs=50.0, seed=9)
     path = tmp_path / "dSub 1.tdms"
     with TdmsWriter(path) as w:

@@ -69,7 +69,19 @@ def test_oasis_spike_events_threshold_modes():
     s = np.zeros(200)
     s[[20, 21, 80, 150]] = [2.0, 1.0, 0.5, 4.0]
     c = DeconvData(time=t, denoised=np.zeros(200), spikes=s, fs=20.0, baseline=0.0, g=(0.95,), lam=0.0, sn=1.0)
+    c.denoised[[20, 21, 22, 80, 150]] = [2, 3, 3.5, 0.5, 4]
     ev = detect_events(c, None, EventConfig(spike_threshold=0.8))           # 0.8 × σ = 0.8
+    assert ev.events["peak_time_s"].tolist() == [t[22], t[150]]
+    from fiberphoto.data import DffData
+    from fiberphoto.plotting import fig_deconv
+    import matplotlib.pyplot as plt
+    b = DffData(t, c.denoised, c.fs, c.denoised, None, "example", "ratio")
+    fig = fig_deconv(c, b, ev, lang="en")
+    marker = next(line for line in fig.axes[0].lines if line.get_label() == "Event peaks")
+    np.testing.assert_array_equal(marker.get_xdata(), t[[22, 150]])
+    np.testing.assert_array_equal(marker.get_ydata(), [3.5, 4])
+    np.testing.assert_array_equal(marker.get_marker()[1], [0, 0])
+    plt.close(fig)
     assert list(ev.events["time_s"]) == [1.0, 7.5]
     assert ev.events["spike_sum"].tolist() == [3.0, 4.0]                    # adjacent frames merged
     ev = detect_events(c, None, EventConfig(spike_threshold=0.4, spike_threshold_mode="absolute"))

@@ -26,6 +26,14 @@ core plus a bilingual (Chinese/English) desktop app for users without programmin
 
 钙成像光纤记录分析软件：批处理核心 + 中英双语桌面界面，面向没有编程基础的使用者。
 
+## 0.6.1 软件内更新
+
+已安装 0.6.0 的用户可从“帮助 → 检查更新”下载补丁，重启后生效。
+
+- 事件图的三角尖指向去噪荧光曲线的峰值。`events.csv` 的 `peak_time_s` 记录峰值时间，`time_s` 保留检测时间。
+- 运行预处理前可核对已读取的文件、通道、采样范围和本次 ΔF/F 的来源。
+- 拖动或滚轮缩放时，长波形临时以较少的点绘制并保留区间极值。结束交互后恢复完整细节，分析和导出使用完整数据。
+
 ## 0.6.0 安装版 / Installation
 
 [Windows x64 安装程序](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.6.0/FiberLume-0.6.0-Windows-Setup.exe) · [macOS Apple silicon 安装镜像](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.6.0/FiberLume-0.6.0-macOS-AppleSilicon.dmg)

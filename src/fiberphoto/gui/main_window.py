@@ -850,11 +850,33 @@ class MainWindow(QMainWindow):
 
         self._run(lambda: read_recording(path, cfg.channels), done)
 
+    def _confirm_preprocessing(self, raw, cfg):
+        names = raw.channel_names
+        signal = names["signal"]
+        preview = names.get("preview_signal") or signal
+        control = names.get("control") or self.t("none")
+        method = cfg.dedrift.method
+        if method == "isosbestic" and (raw.control is None or names.get("control_role") == "baseline"):
+            method = "biexponential"
+        if cfg.dedrift.prefer_plexon_dff and raw.exported_dff is not None:
+            source = self.t("pre_ratio_source", column=names["exported_dff"])
+        else:
+            source = self.t("pre_raw_source", column=signal, method=method)
+        if names.get("control_role") == "baseline":
+            control = self.t("pre_device_baseline", column=control)
+        message = self.t("pre_confirm_data", file=raw.source, group=names.get("group") or self.t("none"),
+                         preview=preview, control=control, signal=signal, source=source,
+                         count=len(raw.time), fs=raw.fs, start=raw.time[0], end=raw.time[-1])
+        return QMessageBox.question(self, self.t("pre_confirm_title"), message,
+                                    QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes
+
     def step_pre(self):
         if not self._need("file", "A"):
             return
         cfg = self.forms_store()
         a = self.A
+        if not self._confirm_preprocessing(a, cfg):
+            return
 
         def work():
             with warnings.catch_warnings(record=True) as caught:
@@ -1186,13 +1208,13 @@ def _deconv_only(c, b, onsets, lang):
     """Deconvolution result before any events are detected."""
     from ..i18n import tr
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
-    ax1.plot(b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
-    ax1.plot(c.time, c.denoised, color=plotting.C_DENOISED, lw=1.0, label=tr("denoised", lang))
+    plotting.plot_trace(ax1, b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
+    plotting.plot_trace(ax1, c.time, c.denoised, color=plotting.C_DENOISED, lw=1.0, label=tr("denoised", lang))
     for t0 in onsets:
         ax1.axvline(t0, color=plotting.C_STIM, lw=0.8, alpha=0.5)
     ax1.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax1.legend(loc="upper right", ncol=2)
-    ax2.vlines(c.time, 0, c.spikes, color=plotting.INK_2, lw=0.6)
+    plotting.plot_trace(ax2, c.time, c.spikes, spikes=True, color=plotting.INK_2, lw=0.6)
     ax2.set_ylabel(tr("spikes", lang))
     ax2.set_xlabel(tr("time_s", lang))
     tau = decay_time_constant(c)

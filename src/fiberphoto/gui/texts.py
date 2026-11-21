@@ -35,6 +35,13 @@ UI: dict[str, dict[str, str]] = {
     "tab_peth": {"zh": "③ 刺激锁定分析", "en": "③ Peri-event"},
     "tab_events": {"zh": "④ 事件检测", "en": "④ Events"},
     "tab_export": {"zh": "⑤ 导出与批处理", "en": "⑤ Export && batch"},
+    "pre_confirm_title": {"zh": "确认预处理输入", "en": "Confirm preprocessing input"},
+    "pre_ratio_source": {"zh": "直接使用设备导出的 {column}（比值）", "en": "Use device-exported {column} (ratio)"},
+    "pre_raw_source": {"zh": "从 {column} 重新计算，基线方法为 {method}", "en": "Recalculate from {column} using {method}"},
+    "pre_device_baseline": {"zh": "{column}（设备基线，仅用于预览）", "en": "{column} (device baseline for preview)"},
+    "pre_confirm_data": {
+        "zh": "文件　{file}\n通道组　{group}\n已读取的原始荧光　{signal}\n预览信号　{preview}\n所选对照　{control}\n数据范围　{start:.3f}–{end:.3f} s，共 {count:,} 帧，{fs:.3f} Hz\n\n本次 ΔF/F 来源　{source}\n\n使用以上数据开始预处理？",
+        "en": "File    {file}\nChannel group    {group}\nLoaded fluorescence    {signal}\nPreview signal    {preview}\nSelected control    {control}\nLoaded range    {start:.3f}–{end:.3f} s, {count:,} frames at {fs:.3f} Hz\n\nΔF/F source    {source}\n\nStart preprocessing with these data?"},
     # tab help
     "help_read": {"zh": "选择左侧的数据文件，确认各通道的含义（软件已自动猜测），然后点击“读取数据”。读取结果即原始数据 data A。",
                   "en": "Pick a recording on the left, check what each channel is (guessed automatically), then click “Load data”. The result is the raw data A."},

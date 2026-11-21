@@ -51,6 +51,42 @@ def test_preview_navigation(qtbot):
     view.set_figure(None)
 
 
+def test_preview_keeps_extrema_and_restores_full_trace(qtbot, monkeypatch):
+    from fiberphoto.display_traces import plot_trace
+    from matplotlib.lines import Line2D
+
+    view = FigureView()
+    qtbot.addWidget(view)
+    fig = Figure()
+    ax = fig.subplots()
+    t = np.arange(60000)
+    values = np.zeros(len(t))
+    values[1234:1236] = [-7, 11]
+    plot_trace(ax, t, values, label="source")
+    view.set_figure(fig)
+    cv = view.canvas
+    cv.draw()
+    seen = []
+    original = Line2D.draw
+    def capture(line, renderer):
+        if line.get_label() == "source":
+            seen.append(np.asarray(line.get_ydata()))
+        return original(line, renderer)
+    monkeypatch.setattr(Line2D, "draw", capture)
+    x, y = ax.bbox.get_points().mean(axis=0).astype(int)
+    cv.callbacks.process("scroll_event", MouseEvent("scroll_event", cv, x, y, step=-1))
+    cv.draw()
+    assert len(seen[-1]) < len(t) // 5
+    assert (seen[-1].min(), seen[-1].max()) == (-7, 11)
+    import io
+    fig.savefig(io.BytesIO(), format="png")
+    np.testing.assert_array_equal(seen[-1], values)
+    qtbot.waitUntil(lambda: not cv.interactive_preview)
+    cv.draw()
+    np.testing.assert_array_equal(seen[-1], values)
+    np.testing.assert_array_equal(ax.lines[0].get_ydata(), values)
+
+
 def test_patch_integrity_compatibility_and_activation(tmp_path, monkeypatch):
     import fiberlume_boot as boot
     import sys

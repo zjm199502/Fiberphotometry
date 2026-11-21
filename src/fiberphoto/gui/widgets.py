@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from PySide6.QtCore import QObject, QRunnable, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
                                QLabel, QSpinBox, QVBoxLayout, QWidget)
 
@@ -167,6 +167,13 @@ class PreviewCanvas(FigureCanvasQTAgg):
 
     def __init__(self, figure):
         super().__init__(figure)
+        self.interactive_preview = False
+        self._frame = QTimer(self)
+        self._frame.setSingleShot(True)
+        self._frame.timeout.connect(self.draw_idle)
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.timeout.connect(self._finish_preview)
         self._drag = None
         self._moved = False
         self.mpl_connect("button_press_event", self._press)
@@ -175,6 +182,29 @@ class PreviewCanvas(FigureCanvasQTAgg):
         self.mpl_connect("scroll_event", self._scroll)
         self.setToolTip("左键或中键平移，右键拖动缩放，滚轮缩放，Home 恢复全图。\n"
                         "Left/middle drag to pan, right drag to scale, scroll to zoom. Home resets.")
+
+    def draw(self):
+        engine = self.figure.get_layout_engine()
+        if not self.interactive_preview or engine is None or self.is_saving():
+            return super().draw()
+        # Axes positions stay fixed throughout a gesture. Reflow labels once it ends.
+        self.figure.set_layout_engine("none")
+        try:
+            return super().draw()
+        finally:
+            self.figure.set_layout_engine(engine)
+
+    def _preview_frame(self):
+        self.interactive_preview = True
+        if not self._frame.isActive():
+            self._frame.start(16)
+
+    def _finish_preview(self):
+        if self.interactive_preview:
+            self.interactive_preview = False
+            self._frame.stop()
+            self._settle.stop()
+            self.draw_idle()
 
     def _target(self, event):
         if self.toolbar is None or self.toolbar.mode or not self.widgetlock.available(self):
@@ -193,10 +223,15 @@ class PreviewCanvas(FigureCanvasQTAgg):
         return None
 
     def _press(self, event):
+        if self.toolbar and self.toolbar.mode == "pan/zoom" and event.inaxes is not None:
+            self._settle.stop()
+            self._preview_frame()
+            return
         target = self._target(event)
         if not target or event.button not in (MouseButton.LEFT, MouseButton.MIDDLE, MouseButton.RIGHT):
             return
         ax, mask = target
+        self._settle.stop()
         self._drag = (ax, mask, event.button, np.array([event.x, event.y]),
                       ax.bbox.get_points().copy(), ax.transData.frozen().inverted())
         self._moved = False
@@ -209,7 +244,7 @@ class PreviewCanvas(FigureCanvasQTAgg):
             ax.set_xlim(limits[:, 0])
         if mask[1]:
             ax.set_ylim(limits[:, 1])
-        self.draw_idle()
+        self._preview_frame()
 
     def _move(self, event):
         if self._drag is None:
@@ -231,12 +266,16 @@ class PreviewCanvas(FigureCanvasQTAgg):
         self._limits(ax, mask, pixels, inverse)
 
     def _release(self, event):
-        if self._drag and event.button == self._drag[2]:
+        if self._drag is None:
+            self._finish_preview()
+            return
+        if event.button == self._drag[2]:
             self._move(event)
             if self._moved:
                 self.toolbar.push_current()
             self._drag = None
             self._moved = False
+            self._finish_preview()
 
     def _scroll(self, event):
         target = self._target(event)
@@ -249,6 +288,7 @@ class PreviewCanvas(FigureCanvasQTAgg):
             self.toolbar.push_current()
         pixels = anchor + (ax.bbox.get_points() - anchor) * factor
         self._limits(ax, mask, pixels, ax.transData.inverted())
+        self._settle.start(140)
         self.toolbar.push_current()
 
 

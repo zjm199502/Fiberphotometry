@@ -149,18 +149,26 @@ def detect_spike_events(c: DeconvData, cfg: EventConfig) -> EventResult:
     idx = np.flatnonzero(c.spikes >= floor)
     groups = np.split(idx, np.flatnonzero(np.diff(c.time[idx]) > cfg.min_distance_s) + 1) if idx.size else []
     rows = []
-    for g in groups:
+    # With finite rise time, the fluorescence may crest after the last inferred spike.
+    # Stop at the first descent or the next candidate, whichever comes first.
+    crests = np.r_[np.flatnonzero(np.diff(c.denoised) < 0), len(c.time) - 1]
+    for i, g in enumerate(groups):
         sg = c.spikes[g]
         if sg.max() < thr:
             continue
         first, last = g[0], g[-1]
         before = c.denoised[first - 1] if first > 0 else c.denoised[first] - c.spikes[first]
+        end = crests[crests.searchsorted(last)]
+        if i + 1 < len(groups):
+            end = min(end, groups[i + 1][0] - 1)
+        peak = first + np.argmax(c.denoised[first:end + 1])
         rows.append({"time_s": c.time[g[np.argmax(sg >= thr)]],
-                     "amplitude": float(c.denoised[first: last + 1].max() - before),
+                     "peak_time_s": c.time[peak],
+                     "amplitude": float(c.denoised[first:last + 1].max() - before),
                      "spike_sum": float(c.spikes[first: last + 1].sum()),
                      "max_spike": float(sg.max()),
                      "n_frames": int(g.size)})
-    ev = pd.DataFrame(rows, columns=["time_s", "amplitude", "spike_sum", "max_spike", "n_frames"])
+    ev = pd.DataFrame(rows, columns=["time_s", "peak_time_s", "amplitude", "spike_sum", "max_spike", "n_frames"])
     ev["iei_s"] = ev["time_s"].diff()
     return EventResult(ev, _summary(ev, c, sn, thr), thr, sn, "oasis")
 
@@ -196,6 +204,7 @@ def detect_peak_events(c: DeconvData, b: DffData, cfg: EventConfig) -> EventResu
     widths = sps.peak_widths(y, peaks, rel_height=0.5)[0] / c.fs if peaks.size else np.array([])
     ev = pd.DataFrame({
         "time_s": c.time[peaks],
+        "peak_time_s": c.time[peaks],
         "amplitude": y[peaks] - floor,
         "prominence": props.get("prominences", np.array([])),
         "half_width_s": widths,

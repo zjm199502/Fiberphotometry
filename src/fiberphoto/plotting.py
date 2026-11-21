@@ -19,6 +19,7 @@ from matplotlib.figure import Figure
 from .analysis import EventResult, PethResult
 from .data import DeconvData, DffData, RawData
 from .i18n import tr
+from .display_traces import plot_trace
 
 # Categorical slots (fixed order) and text inks
 C_SIGNAL = "#2a78d6"
@@ -75,10 +76,10 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
     axes = axes[:, 0]
     name = a.channel_names.get("preview_signal") or a.channel_names.get("signal", "")
     ratio = a.exported_dff is not None and name == a.channel_names.get("exported_dff")
-    axes[0].plot(a.time, a.exported_dff if ratio else a.signal, color=C_SIGNAL, lw=0.6)
+    plot_trace(axes[0], a.time, a.exported_dff if ratio else a.signal, color=C_SIGNAL, lw=0.6)
     axes[0].set_ylabel(f"{name}\nΔF/F (ratio)" if ratio else f"{a.indicator}\n{name}")
     if a.control is not None:
-        axes[1].plot(a.time, a.control, color=C_CONTROL, lw=0.6)
+        plot_trace(axes[1], a.time, a.control, color=C_CONTROL, lw=0.6)
         axes[1].set_ylabel(f"{tr('control', lang)}\n{a.channel_names.get('control', '')}")
     for ax in axes:
         for k, (label, on) in enumerate(a.markers.items()):
@@ -95,12 +96,12 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
 
 def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True)
-    ax1.plot(b.time, b.signal, color=C_SIGNAL, lw=0.7, label=tr("signal", lang))
+    plot_trace(ax1, b.time, b.signal, color=C_SIGNAL, lw=0.7, label=tr("signal", lang))
     if b.reference is not None:
-        ax1.plot(b.time, b.reference, color=C_CONTROL, lw=1.2, label=tr("reference", lang))
+        plot_trace(ax1, b.time, b.reference, color=C_CONTROL, lw=1.2, label=tr("reference", lang))
     ax1.set_ylabel(tr("fluor", lang))
     ax1.legend(loc="upper right", ncol=2)
-    ax2.plot(b.time, b.dff, color=C_SIGNAL, lw=0.6)
+    plot_trace(ax2, b.time, b.dff, color=C_SIGNAL, lw=0.6)
     _stim_lines(ax2, onsets, tr("stimulus", lang))
     ax2.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax2.set_xlabel(tr("time_s", lang))
@@ -112,18 +113,22 @@ def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
 def fig_deconv(c: DeconvData, b: DffData, ev: EventResult, onsets=(), lang: str = "zh") -> Figure:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True,
                                    gridspec_kw={"height_ratios": [3, 1]})
-    ax1.plot(b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
-    ax1.plot(c.time, c.denoised, color=C_DENOISED, lw=1.0, label=tr("denoised", lang))
+    plot_trace(ax1, b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
+    plot_trace(ax1, c.time, c.denoised, color=C_DENOISED, lw=1.0, label=tr("denoised", lang))
     if ev.method == "peak" and np.isfinite(ev.threshold):
         ax1.axhline(ev.threshold, color=INK_2, lw=0.8, ls="--", label=tr("threshold", lang))
     if len(ev.events):
-        idx = np.searchsorted(c.time, ev.events["time_s"].to_numpy())
-        ax1.plot(c.time[idx], c.denoised[idx], "v", color=C_EVENT, ms=5,
-                 markeredgecolor="white", markeredgewidth=0.6, label=tr("events", lang))
+        peak_times = ev.events.get("peak_time_s", ev.events["time_s"])
+        idx = np.searchsorted(c.time, peak_times.to_numpy())
+        # Anchor the downward tip to the sample, leaving the waveform visible below.
+        triangle = np.array([[-0.65, 1], [0, 0], [0.65, 1], [-0.65, 1]])
+        ax1.plot(c.time[idx], c.denoised[idx], linestyle="none", marker=triangle,
+                 color=C_EVENT, ms=10, markeredgecolor="white", markeredgewidth=0.4,
+                 label=tr("event_peaks", lang), zorder=4)
     _stim_lines(ax1, onsets)
     ax1.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax1.legend(loc="upper right", ncol=4)
-    ax2.vlines(c.time, 0, c.spikes, color=INK_2, lw=0.6)
+    plot_trace(ax2, c.time, c.spikes, spikes=True, color=INK_2, lw=0.6)
     if ev.method == "oasis" and np.isfinite(ev.threshold):
         ax2.axhline(ev.threshold, color=C_EVENT, lw=0.8, ls="--", label=tr("threshold", lang))
         ax2.legend(loc="upper right")

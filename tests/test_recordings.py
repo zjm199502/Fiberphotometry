@@ -82,7 +82,8 @@ def test_doric_series_and_ttl_clock(tmp_path, store, channel):
     path.rename(tmp_path / "moved.doric")
 
 
-def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path):
+def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
     from fiberphoto.data import save_stage, load_stage
     from fiberphoto.gui.main_window import MainWindow
 
@@ -107,6 +108,14 @@ def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path):
     np.testing.assert_allclose(secondary.lines[0].get_ydata(), 53.)
     np.testing.assert_allclose(window.A.signal, 55 + np.cos(t))
     window.form_deconv.editors["enabled"].setChecked(False)
+    prompts = []
+    def answer(*args):
+        prompts.append(args[2])
+        return QMessageBox.Cancel if len(prompts) == 1 else QMessageBox.Yes
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    window.step_pre()
+    assert window.B is None and not window._busy
+    assert all(s in prompts[-1] for s in ("rat.csv", "RawF_1", "F0_1", "device-exported R_1", "1,800"))
     window.step_pre()
     qtbot.waitUntil(lambda: not window._busy, timeout=10000)
     assert window.B.unit == "ratio" and window.B.method == "Plexon R_1"
@@ -120,6 +129,7 @@ def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path):
     window.step_pre()
     qtbot.waitUntil(lambda: not window._busy, timeout=10000)
     assert window.B.unit == "%" and window.B.method == "polynomial"
+    assert "Recalculate from RawF_1 using polynomial" in prompts[-1]
     np.testing.assert_allclose(window.A.exported_dff, ratio, atol=1e-15)
 
 

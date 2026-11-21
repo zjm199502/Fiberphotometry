@@ -16,6 +16,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "denoised": {"zh": "去噪信号", "en": "Denoised"},
     "spikes": {"zh": "推断活动", "en": "Inferred activity"},
     "events": {"zh": "检测到的事件", "en": "Detected events"},
+    "event_peaks": {"zh": "事件峰值", "en": "Event peaks"},
     "threshold": {"zh": "阈值", "en": "Threshold"},
     "peth_title": {"zh": "刺激锁定平均反应", "en": "Peri-event average"},
     "heatmap_title": {"zh": "逐试次热图", "en": "Trial heatmap"},

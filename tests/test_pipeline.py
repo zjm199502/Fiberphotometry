@@ -81,6 +81,8 @@ def test_event_detection_recovers_truth(dataset, tmp_path, method, min_precision
     t = truth(paths[0])
     true_times = np.sort(np.r_[t["spontaneous_event_times_s"], t["stimulus_onsets_s"]])
     found = res.events.events["time_s"].to_numpy()
+    if method == "peak":
+        np.testing.assert_array_equal(res.events.events["peak_time_s"], found)
     # precision: detections lying within 1.5 s after a true event
     # (OASIS spikes at the default 0.8 σ threshold trade some precision for sensitivity)
     hits = [np.any((found_t - true_times >= -0.3) & (found_t - true_times < 1.5)) for found_t in found]
