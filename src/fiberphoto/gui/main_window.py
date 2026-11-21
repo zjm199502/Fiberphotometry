@@ -757,7 +757,7 @@ class MainWindow(QMainWindow):
         self._workers.add(w)   # keep the runnable and its signals alive until it reports back
 
         def finish(out):
-            self._workers.discard(w)
+            self._workers.clear()
             self._set_busy(False)
             if self._closing:
                 self.close()
@@ -765,7 +765,7 @@ class MainWindow(QMainWindow):
                 done(out)
 
         def fail(msg):
-            self._workers.discard(w)
+            self._workers.clear()
             self._set_busy(False)
             if self._closing:
                 self.close()

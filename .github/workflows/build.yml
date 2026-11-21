@@ -64,7 +64,10 @@ jobs:
           $setup = (Get-Item installer/*-Setup.exe).FullName
           function Invoke-Checked($file, $arguments) {
             $p = Start-Process -FilePath $file -ArgumentList $arguments -Wait -PassThru
-            if ($p.ExitCode -ne 0) { throw "$file exited with $($p.ExitCode)" }
+            if ($p.ExitCode -ne 0) {
+              if (Test-Path "$qa/verify-error.txt") { Get-Content "$qa/verify-error.txt" }
+              throw "$file exited with $($p.ExitCode)"
+            }
           }
           1..2 | ForEach-Object {
             Invoke-Checked $setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`""
@@ -82,7 +85,10 @@ jobs:
           mount="$RUNNER_TEMP/fiberphoto-mount"
           hdiutil attach installer/*.dmg -readonly -nobrowse -mountpoint "$mount"
           trap 'hdiutil detach "$mount"' EXIT
-          "$mount/FiberPhoto.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/fiberphoto-qa"
+          "$mount/FiberPhoto.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/fiberphoto-qa" || {
+            cat "$RUNNER_TEMP/fiberphoto-qa/verify-error.txt"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: FiberPhoto-${{ env.VER }}-${{ runner.os }}-${{ matrix.arch }}
