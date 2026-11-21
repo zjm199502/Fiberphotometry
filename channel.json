@@ -1,4 +1,5 @@
 {
-  "version": "0.6.0",
-  "base": "0.6.0"
+  "version": "0.6.1",
+  "base": "0.6.0",
+  "sha256": "bed1268390cdfdbcc38f17b4a79b5340dc824280e748ad0bcfacdfd76f131464"
 }
