@@ -119,6 +119,8 @@ def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path, monkeypatch
     window.step_pre()
     qtbot.waitUntil(lambda: not window._busy, timeout=10000)
     assert window.B.unit == "ratio" and window.B.method == "Plexon R_1"
+    assert "[rat.csv] ΔF/F formula" in window.log_view.toPlainText()
+    assert "ΔF/F(t) = R_1(t) (device-exported ratio)" in window.log_view.toPlainText()
     np.testing.assert_array_equal(window.A.exported_dff, window.B.dff)
     np.testing.assert_allclose(window.B.dff, ratio, atol=1e-15)
     np.testing.assert_allclose(window.B.reference, 53.)
@@ -130,6 +132,7 @@ def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path, monkeypatch
     qtbot.waitUntil(lambda: not window._busy, timeout=10000)
     assert window.B.unit == "%" and window.B.method == "polynomial"
     assert "Recalculate from RawF_1 using polynomial" in prompts[-1]
+    assert "F0(t) = polyval(" in window.log_view.toPlainText()
     np.testing.assert_allclose(window.A.exported_dff, ratio, atol=1e-15)
 
 

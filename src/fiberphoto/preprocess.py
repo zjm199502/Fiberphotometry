@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import numpy as np
 from scipy import optimize, signal as sps
@@ -60,7 +61,7 @@ def _biexp(t, a, tau1, b, tau2, c):
     return a * np.exp(-t / tau1) + b * np.exp(-t / tau2) + c
 
 
-def fit_biexponential(t: np.ndarray, x: np.ndarray) -> np.ndarray:
+def fit_biexponential(t: np.ndarray, x: np.ndarray, *, details: dict | None = None) -> np.ndarray:
     tt = t - t[0]
     span = max(tt[-1], 1.0)
     amp = max(x[: max(1, len(x) // 50)].mean() - x[-max(1, len(x) // 50):].mean(), 1e-6)
@@ -68,9 +69,14 @@ def fit_biexponential(t: np.ndarray, x: np.ndarray) -> np.ndarray:
     bounds = ([0, 1e-3, 0, 1e-3, -np.inf], [np.inf, 10 * span, np.inf, 100 * span, np.inf])
     try:
         p, _ = optimize.curve_fit(_biexp, tt, x, p0=p0, bounds=bounds, maxfev=20000)
+        if details is not None:
+            details.update(fit="biexponential", coefficients=p)
         return _biexp(tt, *p)
     except (RuntimeError, ValueError):
-        return np.polyval(np.polyfit(tt, x, 3), tt)
+        p = np.polyfit(tt, x, 3)
+        if details is not None:
+            details.update(fit="polynomial_fallback", coefficients=p)
+        return np.polyval(p, tt)
 
 
 class DataWarning(UserWarning):
@@ -96,26 +102,70 @@ def detect_led_onset(sig: np.ndarray, fs: float, ratio: float = 0.6) -> float:
     return float(above[0] / fs + 1.0)  # 1 s margin for the LED to settle
 
 
+def signal_interval_slice(raw: RawData, start: float | None, end: float | None) -> slice:
+    """Validate a closed acquisition-clock interval and return its original sample slice."""
+    time = np.asarray(raw.time, dtype=float)
+    if (start is None or end is None or not np.isfinite(start) or not np.isfinite(end)
+            or start >= end or not time.size or start < time[0] or end > time[-1]):
+        raise ValueError("请选择记录范围内起点早于终点的区间 / Select an increasing interval inside the recording")
+    first = np.searchsorted(time, start, side="left")
+    stop = np.searchsorted(time, end, side="right")
+    if stop - first < 2:
+        raise ValueError("所选区间至少需含两个样本 / Interval needs at least two samples")
+    return slice(first, stop)
+
+
+def signal_interval_baseline(raw: RawData, start: float, end: float) -> tuple[float, int]:
+    """Median F0 and finite sample count on the original signal within [start, end] seconds."""
+    window = np.asarray(raw.signal[signal_interval_slice(raw, start, end)], dtype=float)
+    finite = window[np.isfinite(window)]
+    if len(finite) < 2:
+        raise ValueError("基线区间至少需含两个有效原始荧光样本 / Baseline needs at least two finite raw signal samples")
+    baseline = float(np.median(finite))
+    if not np.isfinite(baseline) or baseline <= 0:
+        raise ValueError("所选区间的荧光中位数须为有限正值 / Baseline median fluorescence must be finite and positive")
+    return baseline, len(finite)
+
+
 def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
+    result = _dedrift_fluorescence(raw, cfg)
+    result.behavior = raw.behavior_on(result.time)
+    result.signal_start_s = cfg.signal_start_s
+    result.signal_end_s = cfg.signal_end_s
+    return result
+
+
+def _dedrift_fluorescence(raw: RawData, cfg: DedriftConfig) -> DffData:
     t, sig, ctl, fs = raw.time, raw.signal, raw.control, raw.fs
-    if cfg.prefer_plexon_dff and raw.exported_dff is not None:
-        if not np.isfinite(raw.exported_dff).all():
+    method = cfg.method
+    selected = cfg.signal_start_s is not None or cfg.signal_end_s is not None
+    interval = signal_interval_slice(raw, cfg.signal_start_s, cfg.signal_end_s) if selected else slice(None)
+    if method != "signal_interval" and cfg.prefer_plexon_dff and raw.exported_dff is not None:
+        ratio = raw.exported_dff[interval]
+        if not np.isfinite(ratio).all():
             raise ValueError("Invalid Plexon R values; select raw recalculation / R 列含无效值，请选择从原始荧光重算")
-        return DffData(t, raw.exported_dff.copy(), fs, sig, raw.exported_f0,
+        reference = raw.exported_f0[interval] if raw.exported_f0 is not None else None
+        return DffData(t[interval], ratio.copy(), fs, sig[interval], reference,
                        f"Plexon {raw.channel_names['exported_dff']}", "ratio")
+    details = {}
+    if method == "signal_interval":
+        baseline, n = signal_interval_baseline(raw, cfg.baseline_start_s, cfg.baseline_end_s)
+        details.update(start=cfg.baseline_start_s, end=cfg.baseline_end_s, samples=n, f0=baseline)
+        ctl = None
     if raw.channel_names.get("control_role") == "baseline":
         ctl = None  # F0 is a preview baseline, not an independently measured control
-    trim_start = cfg.trim_start_s
-    if cfg.auto_trim:
-        onset = detect_led_onset(sig, fs)
-        if onset > trim_start:
-            warnings.warn(f"检测到前 {onset:.1f} s 光源未开启，已自动去除 / "
-                          f"Light source off for the first {onset:.1f} s; trimmed automatically", DataWarning)
-            trim_start = onset
-    i0 = np.searchsorted(t, t[0] + trim_start)
-    i1 = np.searchsorted(t, t[-1] - cfg.trim_end_s, side="right")
-    t, sig = t[i0:i1], sig[i0:i1]
-    ctl = ctl[i0:i1] if ctl is not None else None
+    if not selected:
+        trim_start = cfg.trim_start_s
+        if cfg.auto_trim and method != "signal_interval":
+            onset = detect_led_onset(sig, fs)
+            if onset > trim_start:
+                warnings.warn(f"检测到前 {onset:.1f} s 光源未开启，已自动去除 / "
+                              f"Light source off for the first {onset:.1f} s; trimmed automatically", DataWarning)
+                trim_start = onset
+        interval = slice(np.searchsorted(t, t[0] + trim_start),
+                         np.searchsorted(t, t[-1] - cfg.trim_end_s, side="right"))
+    t, sig = t[interval], sig[interval]
+    ctl = ctl[interval] if ctl is not None else None
 
     sig_raw = sig
     if cfg.lowpass_hz:
@@ -123,20 +173,30 @@ def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
         ctl = lowpass(ctl, fs, cfg.lowpass_hz) if ctl is not None else None
     t, (sig, ctl, sig_raw), fs = downsample(t, [sig, ctl, sig_raw], fs, cfg.downsample_hz)
 
-    method = cfg.method
+    if selected and len(t) < 2:
+        raise ValueError("降采样后区间内不足两个样本 / Signal interval too short for requested downsampling")
     if method == "isosbestic" and ctl is None:
         method = "biexponential"   # no control channel recorded
 
     if method == "isosbestic":
         a, b = fit_control_irls(ctl, sig)
         ref = a * ctl + b
+        details.update(slope=a, intercept=b)
+    elif method == "signal_interval":
+        if not t.size:
+            raise ValueError("裁剪或降采样后无可用样本 / No samples after trimming or downsampling")
+        ref = np.full(sig.shape, baseline, dtype=float)
     elif method == "biexponential":
-        ref = fit_biexponential(t, sig)
+        ref = fit_biexponential(t, sig, details=details)
     elif method == "polynomial":
-        tt = (t - t[0]) / max(t[-1] - t[0], 1e-9)
-        ref = np.polyval(np.polyfit(tt, sig, cfg.poly_order), tt)
+        span = max(t[-1] - t[0], 1e-9)
+        tt = (t - t[0]) / span
+        coeff = np.polyfit(tt, sig, cfg.poly_order)
+        details.update(coefficients=coeff, span=span)
+        ref = np.polyval(coeff, tt)
     elif method == "highpass":
         ref = sig - highpass(sig, fs, cfg.highpass_hz)
+        details["cutoff_hz"] = cfg.highpass_hz
     else:
         raise ValueError(f"Unknown de-drift method: {method}")
 
@@ -146,7 +206,8 @@ def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
                       DataWarning)
     if method != cfg.method:
         warnings.warn(f"没有对照通道，改用 {method} 方法 / No control channel; using {method} instead", DataWarning)
-    safe_ref = np.where(np.abs(ref) < 1e-12, 1e-12, ref)
+    safe_ref = ref if method == "signal_interval" else np.where(np.abs(ref) < 1e-12, 1e-12, ref)
+    details["floored"] = bool(np.any(safe_ref != ref))
     dff = (sig - ref) / safe_ref * 100.0
     # OASIS estimates noise from the high-frequency spectrum, which the low-pass
     # would remove; keep an unfiltered copy for deconvolution
@@ -154,10 +215,58 @@ def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
     unit = "%"
     if cfg.output == "zscore":
         centre, scale = np.median(dff), (np.std(dff) or 1.0)
+        details.update(centre=centre, scale=scale)
         dff, dff_raw = (dff - centre) / scale, (dff_raw - centre) / scale
         unit = "z"
     return DffData(time=t, dff=dff, fs=fs, signal=sig, reference=ref, method=method, unit=unit,
-                   dff_unfiltered=dff_raw)
+                   dff_unfiltered=dff_raw, formula_info=details)
+
+
+def format_dff_formula(raw: RawData, result: DffData, lang: str = "zh") -> str:
+    """Describe the actual device source or fitted calculation for a completed run."""
+    zh = lang == "zh"
+    file = Path(raw.source).name or ("当前记录" if zh else "recording")
+    prefix = f"[{file}] " + ("ΔF/F 公式　" if zh else "ΔF/F formula    ")
+    if result.method.startswith("Plexon "):
+        column = result.method.removeprefix("Plexon ")
+        label = "设备导出比值" if zh else "device-exported ratio"
+        return f"{prefix}ΔF/F(t) = {column}(t) ({label})"
+
+    d = result.formula_info
+    name = raw.channel_names.get("signal") or "signal"
+    source = f"F(t) = {'预处理后' if zh else 'processed'} {name}(t)"
+    if not d:  # Earlier HDF5 exports contain the baseline waveform but no fit coefficients.
+        baseline = f"F0(t) = data B.reference ({result.method})"
+    elif result.method == "signal_interval":
+        baseline = (f"F0 = median({name}[{d['start']:.12g}–{d['end']:.12g} s])"
+                    f" = {d['f0']:.12g} (n = {d['samples']})")
+    elif result.method == "isosbestic":
+        control = raw.channel_names.get("control") or "control"
+        baseline = (f"F0(t) = {d['slope']:.12g} × C(t) {d['intercept']:+.12g}, "
+                    f"C(t) = {'预处理后' if zh else 'processed'} {control}(t)")
+    elif result.method == "highpass":
+        baseline = f"F0(t) = F(t) − HP(F(t), {d['cutoff_hz']:.12g} Hz)"
+    elif d.get("fit") == "biexponential":
+        a, tau1, b, tau2, c = d["coefficients"]
+        baseline = (f"F0(t) = {a:.12g} × exp(−u/{tau1:.12g}) {b:+.12g} × exp(−u/{tau2:.12g}) "
+                    f"{c:+.12g}, u = t − ({result.time[0]:.12g} s)")
+    else:
+        coeff = ", ".join(f"{x:.12g}" for x in d["coefficients"])
+        baseline = f"F0(t) = polyval([{coeff}], u), u = (t − ({result.time[0]:.12g} s))"
+        if result.method == "polynomial":
+            baseline += f" / ({d['span']:.12g} s)"
+        else:
+            baseline += "（双指数拟合失败，采用三次多项式）" if zh else " (cubic fallback after biexponential fit failure)"
+    divisor = "F0" if result.method == "signal_interval" else "F0(t)"
+    formula = f"ΔF/F (%) = 100 × (F(t) − {divisor}) / "
+    if d.get("floored"):
+        formula += "D(t), D(t) = where(|F0(t)| < 1e−12, 1e−12, F0(t))"
+    else:
+        formula += divisor
+    if result.unit == "z":
+        formula += (f" · z(t) = (ΔF/F (%) − ({d['centre']:.12g})) / {d['scale']:.12g}"
+                    if "centre" in d else " · z(t) = (ΔF/F (%) − median) / SD")
+    return f"{prefix}{source} · {baseline} · {formula}"
 
 
 def running_percentile(x: np.ndarray, window: int, q: float) -> np.ndarray:
@@ -193,7 +302,7 @@ def deconvolve(b: DffData, cfg: DeconvConfig) -> DeconvData:
         s = np.where(s >= cfg.smin, s, 0.0)
     return DeconvData(time=b.time, denoised=c + base + drift, spikes=s, fs=b.fs,
                       baseline=float(base), g=tuple(float(v) for v in np.atleast_1d(g)),
-                      lam=float(lam), sn=float(GetSn(y)))
+                      lam=float(lam), sn=float(GetSn(y)), behavior=b.behavior)
 
 
 def decay_time_constant(d: DeconvData) -> float:

@@ -28,6 +28,10 @@ class ChannelInfo:
     unit: str
     guess: str           # "signal" | "control" | "marker" | "time" | ""
     median: float = float("nan")  # of the first samples; ranks unnamed signal candidates
+    source_channel: str = ""     # RawF backing a Plexon ratio preview
+
+    def is_available(self, excluded: set[tuple[str, str]]) -> bool:
+        return (self.group, self.name) not in excluded and (self.group, self.source_channel) not in excluded
 
 
 def _channel_fs(ch) -> Optional[float]:
@@ -69,14 +73,20 @@ def inspect_tdms(path: str | Path) -> list[ChannelInfo]:
     return out
 
 
-def auto_map(infos: list[ChannelInfo], cfg: ChannelConfig) -> ChannelConfig:
+def auto_map(infos: list[ChannelInfo], cfg: ChannelConfig, *, excluded: set[tuple[str, str]] | None = None) -> ChannelConfig:
     """Fill in empty fields of ``cfg`` from the guessed roles."""
     cfg = ChannelConfig(**vars(cfg))
+    hidden = {(i.group, i.name) for i in infos if excluded and not i.is_available(excluded)}
+    if hidden:
+        infos = [i for i in infos if (i.group, i.name) not in hidden]
     groups = [i.group for i in infos if i.length > 0]
     if not cfg.group and groups:
         # prefer the group containing a signal guess
         sig_groups = [i.group for i in infos if i.guess == "signal" and i.length > 0]
         cfg.group = sig_groups[0] if sig_groups else groups[0]
+    for role in ("signal", "control", "time"):
+        if (cfg.group, getattr(cfg, role)) in hidden:
+            setattr(cfg, role, "")
     chans = [i for i in infos if i.group == cfg.group]
     if not cfg.signal:
         cand = [i for i in chans if i.guess == "signal"]
@@ -226,7 +236,10 @@ def read_marker_tdms(path: str | Path, t0: float = 0.0, fallback_fs: Optional[fl
 
 def read_tdms(path: str | Path, cfg: ChannelConfig) -> RawData:
     path = Path(path)
-    cfg = auto_map(inspect_tdms(path), cfg)
+    excluded = cfg.exclusions_for(path)
+    infos = inspect_tdms(path)
+    cfg = auto_map(infos, cfg, excluded=excluded)
+    infos = [c for c in infos if c.is_available(excluded)]
     if not cfg.signal:
         raise ValueError("No signal channel found / 未找到信号通道")
     f = TdmsFile.read(path)
@@ -256,12 +269,9 @@ def read_tdms(path: str | Path, cfg: ChannelConfig) -> RawData:
 
     markers, offsets = {}, {}
     for name in cfg.markers:
-        grp = cfg.group if name in [c.name for c in g.channels()] else None
-        if grp is None:  # marker may live in another group
-            for gg in f.groups():
-                if name in [c.name for c in gg.channels()]:
-                    grp = gg.name
-                    break
+        grp = next((c.group for c in infos if c.name == name and c.group == cfg.group), None)
+        if grp is None:  # marker may live in another included group
+            grp = next((c.group for c in infos if c.name == name), None)
         if grp is None:
             continue
         ch = f[grp][name]

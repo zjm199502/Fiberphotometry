@@ -9,6 +9,11 @@ QGroupBox { font-weight: 600; border: 1px solid #dddcd6; border-radius: 6px; mar
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
 QLabel#help { background: #eef4fc; color: #23466e; border-radius: 6px; padding: 8px 10px; }
 QPushButton { padding: 5px 12px; border-radius: 5px; }
+QGroupBox#recordingFiles QPushButton { border: 1px solid #8b99a6; background: #fafbfc; color: #192735; }
+QGroupBox#recordingFiles QPushButton:hover { background: #edf4fc; border-color: #6381a2; }
+QGroupBox#recordingFiles QPushButton:focus { border: 2px solid #246ab1; padding: 4px 11px; }
+QGroupBox#recordingFiles QPushButton:pressed { background: #d8e6f4; }
+QGroupBox#recordingFiles QPushButton:disabled { color: #717983; border-color: #b8bfc6; background: #efefef; }
 QPushButton[primary="true"] { background: #2a78d6; color: white; font-weight: 600; border: none; }
 QPushButton[primary="true"]:hover { background: #2368bd; }
 QPushButton[primary="true"]:disabled { background: #b9cbe3; }

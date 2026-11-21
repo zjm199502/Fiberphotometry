@@ -32,6 +32,18 @@ class RawData:
     exported_f0: Optional[np.ndarray] = None
     indicator: str = "GCaMP"
     indicator_source: str = "default"
+    behavior: Optional[np.ndarray] = None  # behavior on the raw calcium time axis
+    behavior_info: dict = field(default_factory=dict)
+    behavior_native: dict[str, np.ndarray] = field(default_factory=dict)  # mapped timestamps and original values
+
+    def behavior_on(self, time):
+        if self.behavior is None or time is self.time or np.array_equal(time, self.time):
+            return self.behavior
+        from .behavior import BehaviorTrace, align_behavior
+
+        trace = BehaviorTrace(time=self.behavior_native["time"], values=self.behavior_native["values"],
+                              value_column=self.behavior_info["value_column"], source=self.behavior_info["path"])
+        return align_behavior(trace, time, method=self.behavior_info["method"], require_overlap=False)
 
     def apply_indicator(self, override="", annotation=""):
         if override.strip():
@@ -67,6 +79,10 @@ class DffData:
     method: str
     unit: str                     # "%" or "z"
     dff_unfiltered: Optional[np.ndarray] = None  # same ΔF/F without the low-pass, for deconvolution
+    behavior: Optional[np.ndarray] = None
+    signal_start_s: Optional[float] = None
+    signal_end_s: Optional[float] = None
+    formula_info: dict = field(default_factory=dict)  # actual fitted parameters used by this run
 
 
 @dataclass
@@ -80,6 +96,7 @@ class DeconvData:
     g: tuple
     lam: float
     sn: float = float("nan")       # noise σ estimated by OASIS (same units as ΔF/F)
+    behavior: Optional[np.ndarray] = None
 
 
 def _write_group(h5: h5py.File, name: str, obj) -> None:
@@ -118,7 +135,8 @@ def save_stage(path: str | Path, stage: str, obj, csv: bool = False) -> Path:
 def stage_to_csv(path: Path, obj) -> None:
     cols = {k: v for k, v in vars(obj).items()
             if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) == len(obj.time)}
-    pd.DataFrame(cols).to_csv(path, index=False, float_format="%.6g")
+    precision = "%.17g" if obj.behavior is not None else "%.6g"
+    pd.DataFrame(cols).to_csv(path, index=False, float_format=precision)
     if isinstance(obj, RawData) and obj.markers:
         rows = []
         for label, onsets in obj.markers.items():
@@ -141,7 +159,8 @@ def load_stage(path: str | Path, stage: str):
             elif k in g.attrs:
                 v = g.attrs[k]
                 kw[k] = tuple(v) if k == "g" else (v.item() if hasattr(v, "item") and np.ndim(v) == 0 else v)
-            elif cls.__dataclass_fields__[k].default is not dataclasses.MISSING:
+            elif (cls.__dataclass_fields__[k].default is not dataclasses.MISSING
+                  or cls.__dataclass_fields__[k].default_factory is not dataclasses.MISSING):
                 continue  # field added later; older files fall back to its default
             else:
                 kw[k] = None if k in ("control", "reference") else {}

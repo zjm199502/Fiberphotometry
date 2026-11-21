@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import traceback
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -17,11 +17,12 @@ import numpy as np
 import pandas as pd
 
 from . import analysis, plotting
+from .behavior import BehaviorConfig, align_behavior, load_behavior_csv
 from .config import ChannelConfig, PipelineConfig
 from .data import DeconvData, DffData, RawData, save_stage
 from .i18n import tr
 from .recordings import is_recording, read_recording, recording_family
-from .preprocess import DataWarning, decay_time_constant, dedrift, deconvolve
+from .preprocess import DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula
 
 LogFn = Callable[[str], None]
 ProgressFn = Callable[[float], None]
@@ -46,7 +47,8 @@ def _noop(*_a, **_k):
     pass
 
 
-def pick_marker(a: RawData, wanted: str, align: str = "onset", shift_s: float = 0.0) -> tuple[str, np.ndarray]:
+def pick_marker(a: RawData, wanted: str, align: str = "onset", shift_s: float = 0.0,
+                *, processed: DffData | None = None) -> tuple[str, np.ndarray]:
     """Stimulus times for one marker label.
 
     ``align="offset"`` uses the end of each TTL pulse (for rigs where the
@@ -62,7 +64,31 @@ def pick_marker(a: RawData, wanted: str, align: str = "onset", shift_s: float = 
         off = np.asarray(a.marker_offsets.get(label, np.full(times.size, np.nan)), dtype=float)
         if off.size == times.size:
             times = np.where(np.isnan(off), times, off)
-    return label, times + shift_s
+    times = times + shift_s
+    if processed is not None and processed.signal_start_s is not None:
+        times = times[(times >= processed.signal_start_s) & (times <= processed.signal_end_s)]
+    return label, times
+
+
+def attach_behavior(raw: RawData, spec: BehaviorConfig | None) -> RawData:
+    if spec is None:
+        return replace(raw, behavior=None, behavior_info={}, behavior_native={})
+    trace = load_behavior_csv(spec.path, spec.value_column, time_column=spec.time_column,
+                              time_unit=spec.time_unit, sampling_rate_hz=spec.sampling_rate_hz)
+    mapped = replace(trace, time=trace.aligned_time(raw.time[0], offset_s=spec.offset_s,
+                                                   align_starts=spec.align_starts))
+    aligned = align_behavior(mapped, raw.time, method=spec.method)
+    info = {k: v for k, v in asdict(spec).items() if v is not None}
+    info.update(path=str(Path(spec.path).resolve()), value_column=trace.value_column,
+                valid_frames=int(np.isfinite(aligned).sum()), calcium_frames=len(raw.time))
+    return replace(raw, behavior=aligned, behavior_info=info,
+                   behavior_native={"time": mapped.time, "values": mapped.values})
+
+
+def read_with_behavior(path: str | Path, cfg: PipelineConfig) -> RawData:
+    raw = read_recording(path, cfg.channels)
+    spec = cfg.behavior_by_recording.get(str(Path(path).resolve()))
+    return attach_behavior(raw, spec) if spec is not None else raw
 
 
 def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
@@ -76,7 +102,7 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
     h5 = out / f"{path.stem}.h5"
     try:
         log(tr("log_read", lang, name=path.name))
-        a = read_recording(path, cfg.channels)
+        a = read_with_behavior(path, cfg)
         if h5.exists():
             h5.unlink()
         res.A = a
@@ -88,8 +114,10 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", DataWarning)
-            b = dedrift(a, cfg.dedrift)
+            dedrift_cfg = cfg.for_recording(path).dedrift
+            b = dedrift(a, dedrift_cfg)
         log(tr("log_dedrift", lang, method=b.method))
+        log(format_dff_formula(a, b, lang))
         for w in caught:
             if issubclass(w.category, DataWarning):
                 log(f"⚠ {w.message}")
@@ -104,12 +132,22 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
             save_stage(h5, "C", c, csv=cfg.save_csv)
         progress(0.55)
 
-        marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s)
+        marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=b)
         summary = {"file": path.name, "fs_raw_hz": a.fs, "fs_processed_hz": b.fs,
                    "duration_s": float(a.time[-1] - a.time[0]),
                    "indicator": a.indicator, "indicator_source": a.indicator_source, "dff_unit": b.unit,
                    "dedrift_method": b.method, "marker": marker, "n_markers": int(len(onsets))}
 
+        if b.signal_start_s is not None:
+            summary["signal_interval_s"] = [b.signal_start_s, b.signal_end_s]
+        if b.method == "signal_interval":
+            from .preprocess import signal_interval_baseline
+            start, end = dedrift_cfg.baseline_start_s, dedrift_cfg.baseline_end_s
+            f0, count = signal_interval_baseline(a, start, end)
+            summary["baseline_interval"] = {"signal": a.channel_names["signal"], "start_s": start,
+                                            "end_s": end, "n_samples": count, "median_f0": f0}
+        if a.behavior is not None:
+            summary["behavior"] = a.behavior_info
         if marker:
             p = analysis.peri_event(b, onsets, cfg.peth, marker)
             res.peth = p
@@ -156,11 +194,20 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         res.summary = summary
         (out / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False,
                                                      default=float), encoding="utf-8")
-        cfg.save(out / "parameters.json")   # exact settings, for reproducibility
+        key = str(path.resolve())
+        recording_behavior = {key: cfg.behavior_by_recording[key]} if a.behavior is not None else {}
+        exclusions = cfg.channels.excluded_channels
+        recording_channels = replace(cfg.channels, excluded_channels={key: exclusions[key]} if key in exclusions else {})
+        windows = cfg.intervals_by_recording
+        recording_cfg = replace(cfg, channels=recording_channels, behavior_by_recording=recording_behavior,
+                                intervals_by_recording={key: windows[key]} if key in windows else {})
+        recording_cfg.save(out / "parameters.json")
 
         if make_figures:
             res.figures = export_figures(res, cfg)
             log(tr("log_figs", lang, path=out / "figures"))
+        from .method_report import write_method_report
+        write_method_report(res, recording_cfg.for_recording(path))
         progress(1.0)
         log(tr("log_done", lang, name=path.name))
     except Exception as e:  # keep batch runs going; report per file
@@ -204,7 +251,8 @@ def find_recordings(folder: str | Path) -> list[Path]:
 def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Path,
               log: LogFn = _noop, progress: ProgressFn = _noop,
               should_stop: Callable[[], bool] = lambda: False, *,
-              mapping_source: Path | None = None) -> list[SessionResult]:
+              mapping_source: Path | None = None,
+              recording_configs: dict[Path, PipelineConfig] | None = None) -> list[SessionResult]:
     files: list[Path] = []
     for i in inputs:
         i = Path(i)
@@ -222,9 +270,12 @@ def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Pat
             break
         sub = lambda x, k=k: progress((k + x) / max(len(files), 1))
         file_cfg = cfg
-        if mapping_source and recording_family(f) != source_family:
+        if recording_configs and f in recording_configs:
+            file_cfg = recording_configs[f]
+        elif mapping_source and recording_family(f) != source_family:
             file_cfg = replace(cfg, channels=ChannelConfig(marker_threshold=cfg.channels.marker_threshold,
-                                                           indicator=cfg.channels.indicator))
+                                                           indicator=cfg.channels.indicator,
+                                                           excluded_channels=cfg.channels.excluded_channels))
         results.append(run_file(f, file_cfg, out_root, log, sub))
     rows = [r.summary | {"file": r.name, "error": r.error} for r in results]
     if rows:

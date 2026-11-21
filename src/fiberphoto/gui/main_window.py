@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import warnings
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import matplotlib
@@ -21,9 +23,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWid
 from .. import __version__, analysis, plotting
 from ..config import PipelineConfig
 from ..io_tdms import auto_map, find_event_file, inspect_tdms, is_event_file
-from ..recordings import device_traces, read_recording
-from ..pipeline import pick_marker, run_batch, run_file
-from ..preprocess import DataWarning, decay_time_constant, dedrift, deconvolve
+from ..recordings import device_traces
+from ..pipeline import attach_behavior, pick_marker, read_with_behavior, run_batch, run_file
+from .behavior import BehaviorDialog
+from .baseline import BaselinePicker
+from ..preprocess import (DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula,
+                          signal_interval_baseline)
 from .texts import DECONV, DEDRIFT, EVENTS, PETH, ui
 from .previews import channel_previews, preview_trace, sparkline
 from .widgets import FigureView, OptionalFloat, ParamForm, Worker
@@ -47,6 +52,17 @@ def _scroll(w: QWidget) -> QScrollArea:
     return sa
 
 
+@dataclass
+class RecordingViewState:
+    config: PipelineConfig
+    results: tuple
+    channel_infos: list
+    previews: dict
+    tab: int
+    pre_note: str
+    export_note: str
+
+
 class MainWindow(QMainWindow):
     def __init__(self, lang: str | None = None):
         super().__init__()
@@ -60,6 +76,7 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._workers = set()
         self.current: Path | None = None
+        self.recording_states: dict[Path, RecordingViewState] = {}
         self.channel_infos = []
         self.previews = {}
         self._reset_results()
@@ -85,6 +102,31 @@ class MainWindow(QMainWindow):
     def _reset_results(self):
         self.A = self.B = self.C = None
         self.peth = self.events = self.stim_events = None
+
+    def _remember_recording(self):
+        cfg = self.forms_store()
+        # File-specific association maps are shared by the open session. Snapshot
+        # just this view's settings; large analysis arrays are retained by reference.
+        local = replace(cfg, channels=replace(cfg.channels, excluded_channels={}),
+                        behavior_by_recording={}, intervals_by_recording={})
+        self.recording_states[self.current] = RecordingViewState(
+            deepcopy(local), (self.A, self.B, self.C, self.peth, self.events, self.stim_events),
+            self.channel_infos, self.previews, self.tabs.currentIndex(),
+            self.lbl_pre.text(), self.lbl_export.text())
+
+    def _view_config(self, local):
+        channels = replace(local.channels, excluded_channels=self.cfg.channels.excluded_channels)
+        return replace(local, channels=channels, plot=self.cfg.plot, save_csv=self.cfg.save_csv,
+                       behavior_by_recording=self.cfg.behavior_by_recording,
+                       intervals_by_recording=self.cfg.intervals_by_recording)
+
+    def _restore_recording(self, state):
+        self.cfg = self._view_config(state.config)
+        self.A, self.B, self.C, self.peth, self.events, self.stim_events = state.results
+        self.channel_infos, self.previews = state.channel_infos, state.previews
+        self.forms_load()
+        self.lbl_pre.setText(state.pre_note)
+        self.lbl_export.setText(state.export_note)
 
     def t(self, key, **kw):
         return ui(key, self.lang, **kw)
@@ -131,6 +173,7 @@ class MainWindow(QMainWindow):
 
     def _build_files_panel(self):
         self.files_box = QGroupBox()
+        self.files_box.setObjectName("recordingFiles")
         lay = QVBoxLayout(self.files_box)
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -172,6 +215,16 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         self.help_read = self._help_label()
         v.addWidget(self.help_read)
+        behavior_row = QHBoxLayout()
+        self.b_behavior = QPushButton(clicked=self.pick_behavior_csv)
+        self.b_behavior_clear = QPushButton(clicked=lambda: self.set_behavior(None))
+        self.lbl_behavior = QLabel()
+        self.lbl_behavior.setTextFormat(Qt.PlainText)
+        self.lbl_behavior.setWordWrap(True)
+        behavior_row.addWidget(self.b_behavior)
+        behavior_row.addWidget(self.b_behavior_clear)
+        behavior_row.addWidget(self.lbl_behavior, 1)
+        v.addLayout(behavior_row)
 
         top = QWidget()
         h = QHBoxLayout(top)
@@ -185,7 +238,15 @@ class MainWindow(QMainWindow):
         self.chan_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         self.chan_table.setIconSize(QSize(160, 30))
         self.chan_table.verticalHeader().setDefaultSectionSize(34)
+        self.chan_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         cl.addWidget(self.chan_table)
+        exclusions = QHBoxLayout()
+        self.b_exclude = QPushButton(clicked=self.exclude_selected_channels)
+        self.b_restore = QPushButton(clicked=self.restore_channels)
+        exclusions.addWidget(self.b_exclude)
+        exclusions.addWidget(self.b_restore)
+        exclusions.addStretch()
+        cl.addLayout(exclusions)
         h.addWidget(self.chan_box, 3)
 
         self.map_box = QGroupBox()
@@ -232,9 +293,15 @@ class MainWindow(QMainWindow):
         h.addWidget(self.map_box, 2)
 
         self.fig_raw = FigureView()
+        self.baseline_picker = BaselinePicker(self)
+        raw_panel = QWidget()
+        raw_layout = QVBoxLayout(raw_panel)
+        raw_layout.setContentsMargins(0, 0, 0, 0)
+        raw_layout.addWidget(self.baseline_picker)
+        raw_layout.addWidget(self.fig_raw, 1)
         split = QSplitter(Qt.Vertical)
         split.addWidget(top)
-        split.addWidget(self.fig_raw)
+        split.addWidget(raw_panel)
         split.setSizes([300, 500])
         v.addWidget(split, 1)
         return w
@@ -247,9 +314,13 @@ class MainWindow(QMainWindow):
         v.addWidget(self.help_pre)
         left = QWidget()
         lv = QVBoxLayout(left)
+        self.b_choose_windows = QPushButton(clicked=self._choose_windows)
+        lv.addWidget(self.b_choose_windows)
         self.box_dedrift = QGroupBox()
         self.form_dedrift = ParamForm(DEDRIFT)
+        self.form_dedrift.changed.connect(self.baseline_picker.refresh)
         self.form_dedrift.editors["prefer_plexon_dff"].toggled.connect(self._sync_dff_source)
+        self.form_dedrift.editors["method"].currentIndexChanged.connect(self._sync_dff_source)
         QVBoxLayout(self.box_dedrift).addWidget(self.form_dedrift)
         self.box_deconv = QGroupBox()
         self.form_deconv = ParamForm(DECONV)
@@ -460,6 +531,8 @@ class MainWindow(QMainWindow):
         for i, k in enumerate(("tab_read", "tab_pre", "tab_peth", "tab_events", "tab_export")):
             self.tabs.setTabText(i, t(k))
         self.help_read.setText(t("help_read"))
+        self.baseline_picker.refresh()
+        self._sync_behavior()
         self.lbl_indicator.setText("荧光指示器" if self.lang == "zh" else "Fluorescent indicator")
         self.indicator_edit.setPlaceholderText("自动读取，未注明时为 GCaMP" if self.lang == "zh" else "From file, otherwise GCaMP")
         self.help_pre.setText(t("help_pre"))
@@ -468,6 +541,9 @@ class MainWindow(QMainWindow):
         self.help_export.setText(t("help_export"))
         # tab 1
         self.chan_box.setTitle(t("channels"))
+        self.b_exclude.setText(t("exclude_channels"))
+        self.b_exclude.setToolTip(t("exclude_channels_tip"))
+        self.b_restore.setText(t("restore_channels"))
         self.chan_table.setHorizontalHeaderLabels([t(k) for k in ("col_group", "col_channel", "col_samples",
                                                                   "col_fs", "col_guess", "col_preview")])
         self.lbl_fs_missing.setText(t("fs_missing"))
@@ -487,6 +563,7 @@ class MainWindow(QMainWindow):
         self.b_read.setText(t("btn_read"))
         self._show_markers_found()
         # tab 2
+        self.b_choose_windows.setText(t("choose_windows"))
         self.box_dedrift.setTitle(t("grp_dedrift"))
         self.box_deconv.setTitle(t("grp_deconv"))
         self.b_pre.setText(t("btn_pre"))
@@ -523,14 +600,30 @@ class MainWindow(QMainWindow):
     def _sync_dff_source(self):
         form = self.form_dedrift
         key = "prefer_plexon_dff"
-        direct = self.A is not None and self.A.exported_dff is not None and form.editors[key].isChecked()
+        interval = form.editors["method"].currentData() == "signal_interval"
+        direct = self.A is not None and self.A.exported_dff is not None and form.editors[key].isChecked() and not interval
+        form.editors[key].setEnabled(not interval)
         for name, editor in form.editors.items():
-            if name != key:
-                editor.setVisible(not direct)
-                form.labels[name].setVisible(not direct)
+            if name == key:
+                continue
+            visible = not direct or name in ("signal_start_s", "signal_end_s")
+            if name in ("baseline_start_s", "baseline_end_s"):
+                visible = interval
+            elif name == "auto_trim" and interval:
+                visible = False
+            editor.setVisible(visible)
+            form.labels[name].setVisible(visible)
+
+    def _load_dedrift(self):
+        effective = self.cfg.for_recording(self.current)
+        self.form_dedrift.load(effective)
+        self.baseline_picker.previous_source = None
+        if effective.dedrift.method == "signal_interval" and self.cfg.dedrift.method != "signal_interval":
+            self.baseline_picker.previous_source = (self.cfg.dedrift.method, self.cfg.dedrift.prefer_plexon_dff)
 
     def forms_load(self):
-        for f in (self.form_dedrift, self.form_deconv, self.form_peth, self.form_events):
+        self._load_dedrift()
+        for f in (self.form_deconv, self.form_peth, self.form_events):
             f.load(self.cfg)
         pc = self.cfg.plot
         for fmt, c in self.chk_fmt.items():
@@ -543,18 +636,50 @@ class MainWindow(QMainWindow):
         self.indicator_edit.setText(ch.indicator)
         self._sync_dff_source()
         self.marker_file.setText(ch.marker_file)
+        self._sync_behavior()
+
+    def _store_dedrift(self):
+        if not self.current:
+            self.form_dedrift.store(self.cfg)
+            return
+        base = self.cfg.dedrift
+        edited = replace(self.cfg, dedrift=replace(base))
+        self.form_dedrift.store(edited)
+        values = edited.dedrift
+        # The four clock coordinates belong to this file. Selecting a baseline
+        # also overrides the global method and the Plexon R preference for it.
+        local = {"signal_start_s", "signal_end_s", "baseline_start_s", "baseline_end_s"}
+        if "signal_interval" in (base.method, values.method):
+            local.update(("method", "prefer_plexon_dff"))
+        self.cfg.dedrift = replace(values, **{key: getattr(base, key) for key in local})
+        overrides = {key: getattr(values, key) for key in local if getattr(values, key) != getattr(base, key)}
+        source = str(self.current.resolve())
+        if overrides:
+            self.cfg.intervals_by_recording[source] = overrides
+        else:
+            self.cfg.intervals_by_recording.pop(source, None)
 
     def forms_store(self) -> PipelineConfig:
-        for f in (self.form_dedrift, self.form_deconv, self.form_peth, self.form_events):
+        self._store_dedrift()
+        for f in (self.form_deconv, self.form_peth, self.form_events):
             f.store(self.cfg)
         ch = self.cfg.channels
         ch.group = self.cb_group.currentText()
         ch.indicator = self.indicator_edit.text().strip()
-        ch.signal = self.cb_signal.currentText()
-        ch.control = self.cb_control.currentData() or ""
+        excluded = ch.exclusions_for(self.current) if self.current else set()
+        # Keep hidden role choices for other recordings and for restoring the rows.
+        # read_recording applies this recording's exclusions before resolving roles.
+        hidden = {c.name for c in self.channel_infos if c.group == ch.group and not c.is_available(excluded)}
+        if ch.signal not in hidden or self.cb_signal.currentText():
+            ch.signal = self.cb_signal.currentText()
+        if ch.control not in hidden or self.cb_control.currentData():
+            ch.control = self.cb_control.currentData() or ""
         ch.auto_control = False
-        ch.markers = [self.lst_markers.item(i).text() for i in range(self.lst_markers.count())
-                      if self.lst_markers.item(i).checkState() == Qt.Checked]
+        shown = {self.lst_markers.item(i).text() for i in range(self.lst_markers.count())}
+        hidden_markers = {name for _, name in excluded} - shown
+        ch.markers = ([self.lst_markers.item(i).text() for i in range(self.lst_markers.count())
+                       if self.lst_markers.item(i).checkState() == Qt.Checked]
+                      + [name for name in ch.markers if name in hidden_markers])
         if not ch.markers:
             ch.markers = ["__none__"]  # keep auto-detection from re-adding unticked channels
         ch.sampling_rate = self.fs_edit.value()
@@ -576,9 +701,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.error(str(e))
             return
+        self.recording_states.clear()
         self.forms_load()
         if self.current:
-            self._apply_channel_cfg()
+            self._channels_changed()
         self.log(self.t("params_loaded", path=path))
 
     def save_params(self):
@@ -589,6 +715,7 @@ class MainWindow(QMainWindow):
         self.log(self.t("params_saved", path=path))
 
     def reset_params(self):
+        self.recording_states.clear()
         self.cfg = PipelineConfig()
         self.forms_load()
         if self.current:
@@ -642,7 +769,9 @@ class MainWindow(QMainWindow):
     def remove_file(self):
         row = self.file_list.currentRow()
         if row >= 0:
+            removed = Path(self.file_list.item(row).data(Qt.UserRole))
             self.file_list.takeItem(row)
+            self.recording_states.pop(removed, None)
         if self.file_list.count() == 0:
             self.current = None
             self.channel_infos = []
@@ -652,45 +781,91 @@ class MainWindow(QMainWindow):
         self._update_enabled()
 
     def on_file_selected(self, item, _prev):
+        if self.current and _prev is not None:
+            self._remember_recording()
+        self.baseline_picker.bind(None)
+        self.baseline_picker.previous_source = None
         self._reset_results()
-        self.previews.clear()
+        self.channel_infos, self.previews = [], {}
         self.lbl_pre.clear()
         self.lbl_export.clear()
+        self.current = Path(item.data(Qt.UserRole)) if item is not None else None
+        state = self.recording_states.pop(self.current, None)
+        if state is not None:
+            self._restore_recording(state)
+        self._load_dedrift()
+        if self.current is not None and state is None:
+            try:
+                if self.current.suffix.lower() == ".tdms":
+                    self.channel_infos = inspect_tdms(self.current)
+                    self.previews = channel_previews(self.current)
+                else:
+                    traces = device_traces(self.current)
+                    self.channel_infos = [t.info() for t in traces]
+                    self.previews = {(t.group, t.name): preview_trace(t.values) for t in traces}
+            except Exception as e:
+                self.error(f"{self.current.name}: {e}")
+            self.marker_file.clear()
+        self._fill_channel_table()
+        self._apply_channel_cfg()
+        self._show_auto_pair()
+        self._check_fs()
         self._refresh_marker_choices()
         self._show_markers_found()
         self.redraw_all()
-        if item is None:
-            self.current = None
-            self._update_enabled()
-            return
-        self.current = Path(item.data(Qt.UserRole))
-        try:
-            if self.current.suffix.lower() == ".tdms":
-                self.channel_infos = inspect_tdms(self.current)
-                self.previews = channel_previews(self.current)
-            else:
-                traces = device_traces(self.current)
-                self.channel_infos = [t.info() for t in traces]
-                self.previews = {(t.group, t.name): preview_trace(t.values) for t in traces}
-        except Exception as e:
-            self.channel_infos = []
-            self.previews = {}
-            self.error(f"{self.current.name}: {e}")
-        self._fill_channel_table()
-        self._apply_channel_cfg()
-        self.marker_file.clear()  # an explicit marker file belongs to one recording only
-        self._show_auto_pair()
-        self._check_fs()
-        self.tabs.setCurrentIndex(0)
+        self.tabs.setCurrentIndex(state.tab if state else 0)
         self._update_enabled()
 
     # -------------------------------------------------------- channel panel
     def _is_flat(self, c) -> bool:
         return self.previews.get((c.group, c.name), (None, False))[1]
 
+    def _included_channels(self):
+        if self.current is None:
+            return []
+        excluded = self.cfg.channels.exclusions_for(self.current)
+        return [c for c in self.channel_infos if c.is_available(excluded)]
+
+    def exclude_selected_channels(self):
+        if self.current is None or self._busy:
+            return
+        rows = self.chan_table.selectionModel().selectedRows()
+        if not rows:
+            return
+        self.forms_store()
+        groups = self.cfg.channels.excluded_channels.setdefault(str(self.current.resolve()), {})
+        for index in rows:
+            group = self.chan_table.item(index.row(), 0).text()
+            name = self.chan_table.item(index.row(), 1).text()
+            names = groups.setdefault(group, [])
+            if name not in names:
+                names.append(name)
+        self._channels_changed()
+
+    def restore_channels(self):
+        if self.current is not None and not self._busy:
+            self.forms_store()
+            self.cfg.channels.excluded_channels.pop(str(self.current.resolve()), None)
+            self._channels_changed()
+
+    def _channels_changed(self):
+        self._reset_results()
+        self.lbl_pre.clear()
+        self.lbl_export.clear()
+        self._refresh_marker_choices()
+        self._show_markers_found()
+        self._fill_channel_table()
+        self._apply_channel_cfg()
+        self._check_fs()
+        self.redraw_all()
+        self._update_enabled()
+
     def _fill_channel_table(self):
-        self.chan_table.setRowCount(len(self.channel_infos))
-        for r, c in enumerate(self.channel_infos):
+        included = self._included_channels()
+        self.chan_table.clearSelection()
+        self.chan_table.setRowCount(len(included))
+        self.b_restore.setEnabled(bool(self.current and self.cfg.channels.exclusions_for(self.current)))
+        for r, c in enumerate(included):
             flat = self._is_flat(c)
             guess = self.t("flat") if flat else (self.t(ROLE_KEYS[c.guess]) if c.guess in ROLE_KEYS else "")
             for col, val in enumerate((c.group, c.name, f"{c.length:,}",
@@ -706,8 +881,9 @@ class MainWindow(QMainWindow):
 
     def _check_fs(self):
         """Ask for the sampling rate when the file does not store one."""
-        known = any(c.fs for c in self.channel_infos) or any(c.guess == "time" for c in self.channel_infos)
-        missing = bool(self.channel_infos) and not known
+        included = self._included_channels()
+        known = any(c.fs for c in included) or any(c.guess == "time" for c in included)
+        missing = bool(included) and not known
         self.lbl_fs_missing.setVisible(missing and self.fs_edit.value() is None)
         if missing and self.fs_edit.value() is None:
             self.fs_edit.check.setChecked(True)
@@ -718,8 +894,9 @@ class MainWindow(QMainWindow):
         saved = self.cfg.channels
         base = type(saved)(**{**vars(saved), "group": "", "signal": "", "control": "", "time": "", "markers": [],
                              "auto_control": True})
-        guess = auto_map(self.channel_infos, base)
-        groups = sorted({c.group for c in self.channel_infos}, key=[c.group for c in self.channel_infos].index)
+        included = self._included_channels()
+        guess = auto_map(included, base)
+        groups = list(dict.fromkeys(c.group for c in included))
         self.cb_group.blockSignals(True)
         self.cb_group.clear()
         self.cb_group.addItems(groups)
@@ -730,30 +907,34 @@ class MainWindow(QMainWindow):
 
     def _fill_channel_combos(self, *_a, prefer=None, guess=None):
         g = self.cb_group.currentText()
-        names = [c.name for c in self.channel_infos if c.group == g]
+        included = self._included_channels()
+        names = [c.name for c in included if c.group == g]
         vendor = self.current and self.current.suffix.lower() != ".tdms"
-        all_names = [c.name for c in self.channel_infos if not vendor or (c.group == g and c.guess == "marker")]
+        all_names = list(dict.fromkeys(c.name for c in included if not vendor or (c.group == g and c.guess == "marker")))
         controls = names
         if vendor:
-            local = [c for c in self.channel_infos if c.group == g]
+            local = [c for c in included if c.group == g]
             names = [c.name for c in local if c.guess not in ("marker", "baseline")]
             controls = [c.name for c in local if c.guess not in ("marker", "ratio")]
-        if guess is None:
-            guess = auto_map(self.channel_infos, type(self.cfg.channels)(group=g))
+        if guess is None or guess.group != g:
+            guess = auto_map(included, type(self.cfg.channels)(group=g))
         pick = lambda saved, fallback, pool: saved if saved and saved in pool else fallback
-        flat = {c.name for c in self.channel_infos if (not vendor or c.group == g) and self._is_flat(c)}
+        flat = {c.name for c in included if (not vendor or c.group == g) and self._is_flat(c)}
         live = [n for n in names if n not in flat]
         sig_guess = guess.signal if guess.signal not in flat else (live[0] if live else guess.signal)
         sig = pick(prefer.signal if prefer else "", sig_guess, names)
         ctl = pick(prefer.control if prefer else "", guess.control if guess.control not in flat else "", controls)
         if prefer and prefer.group == g and not prefer.auto_control and not prefer.control:
             ctl = ""
-        markers = [m for m in (prefer.markers if prefer else []) if m in all_names] or \
-            [m for m in guess.markers if m not in flat]
+        markers = [m for m in prefer.markers if m in all_names] if prefer else []
+        if not markers and not (prefer and prefer.group == g and prefer.markers):
+            markers = [m for m in guess.markers if m not in flat]
 
         self.cb_signal.clear()
         self.cb_signal.addItems(names)
         self.cb_signal.setCurrentText(sig)
+        if not sig and self.current and self.cfg.channels.exclusions_for(self.current):
+            self.cb_signal.setCurrentIndex(-1)
         if (self.current and self.current.suffix.lower() == ".doric" and len(names) > 1
                 and not (prefer and prefer.group == g and prefer.signal in names)):
             self.cb_signal.setCurrentIndex(-1)
@@ -775,6 +956,74 @@ class MainWindow(QMainWindow):
         pair = find_event_file(self.current) if self.current and self.current.suffix.lower() == ".tdms" else None
         self.marker_file.setPlaceholderText(
             self.t("auto_paired", name=pair.name) if pair else (self.t("no_pair") if self.current else ""))
+
+    def _sync_behavior(self):
+        key = str(self.current.resolve()) if self.current else None
+        spec = self.cfg.behavior_by_recording.get(key)
+        zh = self.lang == "zh"
+        self.b_behavior.setText(("行为 CSV 设置…" if zh else "Behavior CSV settings…") if spec else
+                                ("导入行为 CSV…" if zh else "Import behavior CSV…"))
+        self.b_behavior.setEnabled(key is not None and not self._busy)
+        self.b_behavior_clear.setText("移除行为序列" if zh else "Remove behavior series")
+        self.b_behavior_clear.setVisible(spec is not None)
+        self.b_behavior_clear.setEnabled(not self._busy)
+        if spec is None:
+            self.lbl_behavior.clear()
+            self.lbl_behavior.setToolTip("")
+            return
+        status = "读取钙记录后对齐" if zh else "Load the recording to align"
+        if self.A is not None and self.A.behavior is not None:
+            valid = self.A.behavior_info["valid_frames"]
+            total = len(self.A.time)
+            status = (f"覆盖 {valid:,}/{total:,} 帧" if zh else f"{valid:,}/{total:,} frames covered")
+        self.lbl_behavior.setText(f"{Path(spec.path).name} · {spec.value_column} · {status}")
+        self.lbl_behavior.setToolTip(spec.path)
+
+    def pick_behavior_csv(self):
+        if self.current is None or self._busy:
+            return
+        previous = self.cfg.behavior_by_recording.get(str(self.current.resolve()))
+        path = previous.path if previous and Path(previous.path).is_file() else None
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, self.b_behavior.text(), str(self.current.parent), "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            dialog = BehaviorDialog(path, self.lang, self, previous=previous if previous and path == previous.path else None)
+        except (OSError, ValueError) as exc:
+            self.error(str(exc))
+            return
+        try:
+            if dialog.exec() == BehaviorDialog.Accepted:
+                self.set_behavior(dialog.config())
+        finally:
+            dialog.deleteLater()
+
+    def set_behavior(self, spec):
+        if self.current is None or self._busy:
+            return
+        key = str(self.current.resolve())
+        raw = self.A
+
+        def apply(aligned):
+            if spec is None:
+                self.cfg.behavior_by_recording.pop(key, None)
+            else:
+                self.cfg.behavior_by_recording[key] = spec
+            self.A = aligned
+            if self.B is not None:
+                self.B.behavior = aligned.behavior_on(self.B.time)
+                if self.C is not None:
+                    self.C.behavior = self.B.behavior
+            if aligned is None:
+                self._sync_behavior()
+            else:
+                self.redraw_all()
+
+        if raw is None or spec is None:
+            apply(attach_behavior(raw, None) if raw is not None else None)
+        else:
+            self._run(lambda: attach_behavior(raw, spec), apply)
 
     def pick_marker_file(self):
         path, _ = QFileDialog.getOpenFileName(self, self.t("lbl_marker_file"), "", self.t("table_filter"))
@@ -848,7 +1097,14 @@ class MainWindow(QMainWindow):
             self._show_markers_found()
             self.redraw_all()
 
-        self._run(lambda: read_recording(path, cfg.channels), done)
+        self._run(lambda: read_with_behavior(path, cfg), done)
+
+    def _choose_windows(self):
+        self.tabs.setCurrentIndex(0)
+        if self.A is None:
+            self.b_read.setFocus()
+        else:
+            self.baseline_picker.signal_button.setFocus()
 
     def _confirm_preprocessing(self, raw, cfg):
         names = raw.channel_names
@@ -858,14 +1114,36 @@ class MainWindow(QMainWindow):
         method = cfg.dedrift.method
         if method == "isosbestic" and (raw.control is None or names.get("control_role") == "baseline"):
             method = "biexponential"
-        if cfg.dedrift.prefer_plexon_dff and raw.exported_dff is not None:
+        signal_start, signal_end = cfg.dedrift.signal_start_s, cfg.dedrift.signal_end_s
+        window = self.t("whole_signal")
+        if signal_start is not None or signal_end is not None:
+            from ..preprocess import signal_interval_slice
+            try:
+                selected = signal_interval_slice(raw, signal_start, signal_end)
+            except ValueError as exc:
+                QMessageBox.information(self, self.t("pre_confirm_title"), str(exc))
+                return False
+            window = self.t("chosen_signal", start=signal_start, end=signal_end, n=raw.time[selected].size)
+        baseline = self.t("no_fixed_baseline")
+        if method == "signal_interval":
+            start, end = cfg.dedrift.baseline_start_s, cfg.dedrift.baseline_end_s
+            try:
+                f0, n = signal_interval_baseline(raw, start, end)
+            except ValueError as exc:
+                QMessageBox.information(self, self.t("pre_confirm_title"), str(exc))
+                return False
+            baseline = self.t("pre_interval_source", column=signal, start=start, end=end, f0=f0, n=n)
+            source = f"100 × ({signal} − F0) / F0"
+            if raw.control is not None:
+                control = self.t("pre_unused_control", column=control)
+        elif cfg.dedrift.prefer_plexon_dff and raw.exported_dff is not None:
             source = self.t("pre_ratio_source", column=names["exported_dff"])
         else:
             source = self.t("pre_raw_source", column=signal, method=method)
-        if names.get("control_role") == "baseline":
+        if names.get("control_role") == "baseline" and method != "signal_interval":
             control = self.t("pre_device_baseline", column=control)
         message = self.t("pre_confirm_data", file=raw.source, group=names.get("group") or self.t("none"),
-                         preview=preview, control=control, signal=signal, source=source,
+                         preview=preview, control=control, signal=signal, source=source, window=window, baseline=baseline,
                          count=len(raw.time), fs=raw.fs, start=raw.time[0], end=raw.time[-1])
         return QMessageBox.question(self, self.t("pre_confirm_title"), message,
                                     QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes
@@ -873,7 +1151,7 @@ class MainWindow(QMainWindow):
     def step_pre(self):
         if not self._need("file", "A"):
             return
-        cfg = self.forms_store()
+        cfg = self.forms_store().for_recording(self.current)
         a = self.A
         if not self._confirm_preprocessing(a, cfg):
             return
@@ -897,6 +1175,7 @@ class MainWindow(QMainWindow):
                 msg += " · " + plotting_tr("log_deconv", self.lang, tau=decay_time_constant(self.C))
             self.lbl_pre.setText("\n".join([msg] + ["⚠ " + pick_lang(n) for n in notes]))
             self.log(msg)
+            self.log(format_dff_formula(a, self.B, self.lang))
             self.redraw_all()
 
         self._run(work, done)
@@ -905,7 +1184,7 @@ class MainWindow(QMainWindow):
         if not self._need("file", "A", "B"):
             return
         cfg = self.forms_store()
-        marker, onsets = pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s)
+        marker, onsets = pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=self.B)
         if not marker:
             QMessageBox.information(self, self.t("app_title"), self.t("no_markers"))
             return
@@ -924,7 +1203,7 @@ class MainWindow(QMainWindow):
             return
         cfg = self.forms_store()
         b, c, a = self.B, self.C, self.A
-        marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s)
+        marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=b)
 
         def work():
             ev = analysis.detect_events(c, b, cfg.events)
@@ -980,12 +1259,14 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------- figures
     def redraw_all(self):
         """Rebuild every figure from the current results, in the interface language."""
+        self._sync_behavior()
         self._sync_dff_source()
         lang = self.lang
         plotting.setup_style(lang)
         cfg = self.cfg
         onsets = self.peth.onsets if self.peth is not None else (
-            pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s)[1] if self.A is not None else ())
+            pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=self.B)[1]
+            if self.A is not None else ())
 
         def put(view, make):
             fig = make() if make else None
@@ -995,6 +1276,7 @@ class MainWindow(QMainWindow):
             view.set_figure(fig)
 
         put(self.fig_raw, (lambda: plotting.fig_raw(self.A, lang)) if self.A is not None else None)
+        self.baseline_picker.bind(self.fig_raw.canvas)
         put(self.fig_dedrift, (lambda: plotting.fig_dedrift(self.B, onsets, lang)) if self.B is not None else None)
         if self.C is not None and self.B is not None:
             ev = self.events or analysis.EventResult(_empty_events(), {}, np.nan, np.nan)
@@ -1061,7 +1343,11 @@ class MainWindow(QMainWindow):
         if out is None:
             return
         cfg = PipelineConfig.from_dict(self.forms_store().to_dict())
-        cfg.channels.marker_file = ""  # each recording uses its own paired marker file
+        configured = {path: deepcopy(self._view_config(state.config)) for path, state in self.recording_states.items()
+                      if state.results[0] is not None}
+        if self.current is not None:
+            configured[self.current] = cfg
+        cfg = replace(cfg, channels=replace(cfg.channels, marker_file=""))  # auto-pair unvisited files
         paths = [self.file_list.item(i).data(Qt.UserRole) for i in range(n)]
         self._stop = False
 
@@ -1073,7 +1359,7 @@ class MainWindow(QMainWindow):
 
         source = self.current
         self._run(lambda log, progress: run_batch(paths, cfg, out, log, progress, lambda: self._stop,
-                                                  mapping_source=source),
+                                                  mapping_source=source, recording_configs=configured),
                   done, pass_callbacks=True)
 
     def cancel(self):
@@ -1089,6 +1375,7 @@ class MainWindow(QMainWindow):
         self._busy = busy
         self.a_update.setEnabled(not busy)
         self.files_box.setEnabled(not busy)
+        self.chan_box.setEnabled(not busy)
         self.m_file.setEnabled(not busy)
         self.m_lang.setEnabled(not busy)
         self.lang_combo.setEnabled(not busy)
@@ -1098,12 +1385,14 @@ class MainWindow(QMainWindow):
         self._update_enabled()
 
     def _update_enabled(self):
+        self._sync_behavior()
         has = self.file_list.count() > 0
         self.files_empty.setVisible(not has)
         for b in (self.b_read, self.b_pre, self.b_peth, self.b_events, self.b_export, self.b_batch):
             b.setEnabled(has and not self._busy)
         self.b_remove.setEnabled(has and not self._busy)
         self.b_cancel.setEnabled(self._busy)
+        self.baseline_picker.refresh()
 
     def log(self, msg: str):
         self.log_view.appendPlainText(msg)
@@ -1176,6 +1465,8 @@ class MainWindow(QMainWindow):
             e.ignore()
             return
         self.pool.waitForDone()
+        self.recording_states.clear()
+        self.baseline_picker.bind(None)
         self._reset_results()
         self.previews.clear()
         self.channel_infos.clear()

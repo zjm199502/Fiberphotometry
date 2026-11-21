@@ -71,7 +71,7 @@ def _stim_lines(ax, onsets, label: Optional[str] = None):
 
 
 def fig_raw(a: RawData, lang: str = "zh") -> Figure:
-    nrow = 2 if a.control is not None else 1
+    nrow = 1 + int(a.control is not None) + int(a.behavior is not None)
     fig, axes = plt.subplots(nrow, 1, figsize=(10, 2.2 * nrow), sharex=True, squeeze=False)
     axes = axes[:, 0]
     name = a.channel_names.get("preview_signal") or a.channel_names.get("signal", "")
@@ -81,6 +81,11 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
     if a.control is not None:
         plot_trace(axes[1], a.time, a.control, color=C_CONTROL, lw=0.6)
         axes[1].set_ylabel(f"{tr('control', lang)}\n{a.channel_names.get('control', '')}")
+    if a.behavior is not None:
+        style = "steps-post" if a.behavior_info["method"] == "previous" else "default"
+        plot_trace(axes[-1], a.time, a.behavior, color="#7b4999", lw=0.8, drawstyle=style)
+        label = "行为" if lang == "zh" else "Behavior"
+        axes[-1].set_ylabel(f"{label}\n{a.behavior_info['value_column']}")
     for ax in axes:
         for k, (label, on) in enumerate(a.markers.items()):
             col = MARKER_COLORS[k % len(MARKER_COLORS)]
@@ -98,7 +103,8 @@ def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True)
     plot_trace(ax1, b.time, b.signal, color=C_SIGNAL, lw=0.7, label=tr("signal", lang))
     if b.reference is not None:
-        plot_trace(ax1, b.time, b.reference, color=C_CONTROL, lw=1.2, label=tr("reference", lang))
+        reference = "F0" if b.method == "signal_interval" else tr("reference", lang)
+        plot_trace(ax1, b.time, b.reference, color=C_CONTROL, lw=1.2, label=reference)
     ax1.set_ylabel(tr("fluor", lang))
     ax1.legend(loc="upper right", ncol=2)
     plot_trace(ax2, b.time, b.dff, color=C_SIGNAL, lw=0.6)

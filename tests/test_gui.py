@@ -40,6 +40,7 @@ def test_full_walkthrough(qtbot, window):
     assert w.A is not None and "DI1_Stim" in w.A.markers
     run(qtbot, w, w.step_pre)
     assert w.B is not None and w.C is not None
+    assert "ΔF/F 公式" in w.log_view.toPlainText() and "405nm" in w.log_view.toPlainText()
     run(qtbot, w, w.step_peth)
     assert w.peth is not None and w.trial_table.rowCount() == len(w.peth.trials) > 0
     run(qtbot, w, w.step_events)
@@ -69,14 +70,24 @@ def test_close_during_analysis(qtbot, window):
 
 
 def test_switch_recordings(qtbot, window):
-    for row in (0, 1, 0):
-        window.file_list.setCurrentRow(row)
-        assert window.A is None
-        assert window.cb_marker_use.count() == 0
-        run(qtbot, window, window.step_read)
-        assert window.A is not None
+    run(qtbot, window, window.step_read)
+    run(qtbot, window, window.step_pre)
+    run(qtbot, window, window.step_peth)
+    run(qtbot, window, window.step_events)
+    window.tabs.setCurrentIndex(3)
+    previous = window.A, window.B, window.C, window.peth, window.events, window.stim_events
+    note = window.lbl_pre.text()
+    window.file_list.setCurrentRow(1)
+    assert window.A is None and window.events is None and not window.cb_marker_use.count()
+    run(qtbot, window, window.step_read)
+    other = window.A
+    window.file_list.setCurrentRow(0)
+    assert all(a is b for a, b in zip(previous, (window.A, window.B, window.C, window.peth, window.events, window.stim_events)))
+    assert window.lbl_pre.text() == note and window.tabs.currentIndex() == 3
+    assert window.fig_events.canvas is not None and window.trial_table.rowCount() > 0
     path = window.current
     window.remove_file()
+    assert path not in window.recording_states and window.A is other
     path.rename(path.with_suffix(".moved"))
 
 
@@ -99,6 +110,26 @@ def test_batch(qtbot, window, tmp_path):
     assert (out / "batch_summary.csv").exists()
     assert len(list(out.glob("*/figures/04_peth_heatmap_z.png"))) == 2
     assert not w.shown
+
+
+def test_batch_uses_each_analyzed_recordings_settings(qtbot, window, tmp_path):
+    from fiberphoto.config import PipelineConfig
+    w = window
+    roots = []
+    for row, method in enumerate(("polynomial", "isosbestic")):
+        w.file_list.setCurrentRow(row)
+        roots.append(tmp_path / "out" / w.current.stem)
+        editor = w.form_dedrift.editors["method"]
+        editor.setCurrentIndex(editor.findData(method))
+        run(qtbot, w, w.step_read)
+        run(qtbot, w, w.step_pre)
+    w.chk_fmt["pdf"].setChecked(False)
+    w.spin_dpi.setValue(72)
+    run(qtbot, w, w.run_batch)
+    for root, method in zip(roots, ("polynomial", "isosbestic")):
+        cfg = PipelineConfig.load(root / "parameters.json")
+        assert cfg.dedrift.method == method
+        assert method in (root / "analysis_methods.json").read_text(encoding="utf-8")
 
 
 def test_needs_previous_step(qtbot, window):

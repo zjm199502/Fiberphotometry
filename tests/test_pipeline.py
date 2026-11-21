@@ -125,6 +125,37 @@ def test_outputs_and_backups(dataset, tmp_path):
     assert set(a.markers) == {"DI1_Stim", "DI2_Lick"}
 
 
+def test_behavior_follows_processed_clock_and_recording(dataset, tmp_path):
+    import pandas as pd
+    from fiberphoto.behavior import BehaviorConfig
+
+    _, paths = dataset
+    csv_path = tmp_path / "movement.csv"
+    # A short state between adjacent raw frames contains the centre of a processed bin.
+    csv_path.write_text("time_ms,active\n1000,0\n1044,1\n1047,0\n2000,0\n", encoding="utf-8")
+    cfg = PipelineConfig()
+    cfg.dedrift.downsample_hz = 10
+    cfg.dedrift.auto_trim = False
+    cfg.dedrift.trim_start_s = 0
+    cfg.behavior_by_recording[str(paths[0].resolve())] = BehaviorConfig(
+        path=str(csv_path), value_column="active", time_column="time_ms", time_unit="ms",
+        method="previous", align_starts=True, offset_s=2)
+    first, second = run_batch(paths, cfg, tmp_path / "out")
+    assert not first.error and not second.error
+    assert second.A.behavior is None and second.B.behavior is None
+    h5 = first.out_dir / f"{paths[0].stem}.h5"
+    a, b, c = (load_stage(h5, key) for key in "ABC")
+    assert np.nanmax(a.behavior) == 0
+    assert b.behavior[np.flatnonzero(np.isclose(b.time, 2.045))[0]] == 1
+    assert np.isnan(b.behavior[b.time < 2]).all() and np.isnan(b.behavior[b.time > 3]).all()
+    np.testing.assert_equal(c.behavior, b.behavior)
+    np.testing.assert_equal(a.behavior_on(b.time), b.behavior)
+    csv = pd.read_csv(first.out_dir / f"{paths[0].stem}_dataB.csv")
+    np.testing.assert_allclose(csv.behavior, b.behavior, equal_nan=True)
+    assert PipelineConfig.load(first.out_dir / "parameters.json") == cfg
+    assert not PipelineConfig.load(second.out_dir / "parameters.json").behavior_by_recording
+
+
 def test_config_roundtrip(tmp_path):
     cfg = PipelineConfig()
     cfg.dedrift.method = "polynomial"

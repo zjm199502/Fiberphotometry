@@ -33,6 +33,7 @@ class Trace:
     baseline_name: str = ""
     ratio: np.ndarray | None = None
     baseline: np.ndarray | None = None
+    source_channel: str = ""
 
     def info(self):
         steps = np.diff(self.time)
@@ -40,7 +41,7 @@ class Trace:
                 or not np.isfinite(self.time).all() or np.any(steps <= 0)):
             raise ValueError(f"{self.name}: invalid timestamps or sample count / 时间戳或样本数无效")
         return ChannelInfo(self.group, self.name, len(self.time), 1 / np.median(steps), "",
-                           self.role, float(np.median(self.values[:20000])))
+                           self.role, float(np.median(self.values[:20000])), self.source_channel)
 
 
 def _csv_layout(columns):
@@ -115,7 +116,8 @@ def _csv_traces(path):
                 trace.baseline = pd.to_numeric(frame[baseline], errors="coerce").to_numpy(float)
             traces.append(trace)
             if trace.ratio is not None:
-                traces.append(Trace(trace.group, trace.ratio_name, "ratio", time, trace.ratio))
+                traces.append(Trace(trace.group, trace.ratio_name, "ratio", time, trace.ratio,
+                                    source_channel=trace.name))
             if trace.baseline is not None:
                 traces.append(Trace(trace.group, trace.baseline_name, "baseline", time, trace.baseline))
     else:
@@ -210,8 +212,9 @@ def read_recording(path, cfg: ChannelConfig):
     if path.suffix.lower() == ".tdms":
         return read_tdms(path, cfg)
     traces = device_traces(path)
-    infos = [t.info() for t in traces]
-    mapped = auto_map(infos, cfg)
+    excluded = cfg.exclusions_for(path)
+    mapped = auto_map([t.info() for t in traces], cfg, excluded=excluded)
+    traces = [t for t in traces if (t.group, t.name) not in excluded and (t.group, t.source_channel) not in excluded]
     channels = {t.name: t for t in traces if t.group == mapped.group}
     if path.suffix.lower() == ".doric" and not cfg.signal:
         analog = [t for t in channels.values() if t.role != "marker"]
@@ -270,8 +273,9 @@ def read_recording(path, cfg: ChannelConfig):
     if mapped.control:
         raw.channel_names["control_role"] = channels[mapped.control].role
     raw.apply_indicator(cfg.indicator, signal.indicator)
-    if signal.ratio is not None:
+    if signal.ratio_name in channels:
         raw.exported_dff = signal.ratio
         raw.channel_names["exported_dff"] = signal.ratio_name
-    raw.exported_f0 = signal.baseline
+    if signal.baseline_name in channels:
+        raw.exported_f0 = signal.baseline
     return raw

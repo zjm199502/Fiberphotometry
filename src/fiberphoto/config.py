@@ -6,9 +6,11 @@ forms from these dataclasses and save/load them as JSON.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Optional
+
+from .behavior import BehaviorConfig
 
 
 @dataclass
@@ -24,12 +26,18 @@ class ChannelConfig:
     marker_file: str = ""           # optional CSV/Excel or marker TDMS; "" = auto-pair <name>-Event.tdms
     auto_control: bool = True       # infer a reference only until an explicit GUI choice
     indicator: str = ""             # explicit override; otherwise read the label or assume GCaMP
+    # Absolute source filename -> group -> channel names; never shared across recordings.
+    excluded_channels: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+
+    def exclusions_for(self, path: str | Path) -> set[tuple[str, str]]:
+        groups = self.excluded_channels.get(str(Path(path).resolve()), {})
+        return {(group, name) for group, names in groups.items() for name in names}
 
 
 @dataclass
 class DedriftConfig:
     """De-drifting and ΔF/F (produces data B)."""
-    method: str = "isosbestic"      # "isosbestic" | "biexponential" | "polynomial" | "highpass"
+    method: str = "isosbestic"      # isosbestic, biexponential, polynomial, highpass or signal_interval
     lowpass_hz: Optional[float] = 10.0   # smoothing before fit; None disables
     downsample_hz: Optional[float] = 20.0  # target rate after smoothing; None keeps raw rate
     poly_order: int = 3
@@ -39,6 +47,10 @@ class DedriftConfig:
     trim_end_s: float = 0.0
     output: str = "dff"             # "dff" (%) or "zscore" for recomputed traces
     prefer_plexon_dff: bool = True  # use the exported ratio at its original timestamps
+    baseline_start_s: float = 0.0   # closed signal_interval window in the acquisition clock
+    baseline_end_s: float = 0.0  # fixed F0 requires a deliberately selected, nonempty interval
+    signal_start_s: Optional[float] = None  # explicit acquisition-clock window used for analysis
+    signal_end_s: Optional[float] = None
 
 
 @dataclass
@@ -97,6 +109,14 @@ class PipelineConfig:
     events: EventConfig = field(default_factory=EventConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     save_csv: bool = True           # CSV copies of data A/B/C next to the HDF5 file
+    behavior_by_recording: dict[str, BehaviorConfig] = field(default_factory=dict)
+    intervals_by_recording: dict[str, dict] = field(default_factory=dict)
+
+    def for_recording(self, path: str | Path | None) -> "PipelineConfig":
+        overrides = self.intervals_by_recording.get(str(Path(path).resolve())) if path else None
+        if not overrides:
+            return self
+        return replace(self, dedrift=replace(self.dedrift, **overrides))
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -108,7 +128,15 @@ class PipelineConfig:
             if f.name not in d:
                 continue
             sub = f.default_factory() if callable(f.default_factory) else None  # type: ignore[misc]
-            if sub is not None and hasattr(sub, "__dataclass_fields__"):
+            if f.name == "behavior_by_recording":
+                kwargs[f.name] = {str(Path(p).resolve()): BehaviorConfig(**spec)
+                                  for p, spec in d[f.name].items()}
+            elif f.name == "intervals_by_recording":
+                allowed = {"signal_start_s", "signal_end_s", "baseline_start_s", "baseline_end_s",
+                           "method", "prefer_plexon_dff"}
+                kwargs[f.name] = {str(Path(path).resolve()): {k: v for k, v in spec.items() if k in allowed}
+                                  for path, spec in d[f.name].items()}
+            elif sub is not None and hasattr(sub, "__dataclass_fields__"):
                 known = {k: v for k, v in d[f.name].items() if k in sub.__dataclass_fields__}
                 kwargs[f.name] = type(sub)(**known)
             else:
