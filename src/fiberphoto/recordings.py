@@ -30,6 +30,7 @@ class Trace:
     values: np.ndarray
     indicator: str = ""
     ratio_name: str = ""
+    baseline_name: str = ""
     ratio: np.ndarray | None = None
     baseline: np.ndarray | None = None
 
@@ -110,8 +111,13 @@ def _csv_traces(path):
                 trace.ratio = pd.to_numeric(frame[trace.ratio_name], errors="coerce").to_numpy(float)
             baseline = columns.get((wave, fiber, "f0"))
             if baseline:
+                trace.baseline_name = baseline
                 trace.baseline = pd.to_numeric(frame[baseline], errors="coerce").to_numpy(float)
             traces.append(trace)
+            if trace.ratio is not None:
+                traces.append(Trace(trace.group, trace.ratio_name, "ratio", time, trace.ratio))
+            if trace.baseline is not None:
+                traces.append(Trace(trace.group, trace.baseline_name, "baseline", time, trace.baseline))
     else:
         state_col = next(c for c in frame if c.lower() in ("ledstate", "flags"))
         flags = frame[state_col].to_numpy(float)
@@ -212,9 +218,11 @@ def read_recording(path, cfg: ChannelConfig):
         if len(analog) != 1:
             raise ValueError("Select the Doric signal and reference for this wiring / 请按实际接线选择通道")
         mapped.signal = analog[0].name
-    if mapped.signal not in channels or channels[mapped.signal].role == "marker":
+    if mapped.signal not in channels or channels[mapped.signal].role in ("marker", "baseline"):
         raise ValueError(f"Select a fluorescence channel / 请选择荧光通道 ({mapped.group})")
     signal = channels[mapped.signal]
+    if signal.role == "ratio":
+        signal = next(t for t in channels.values() if t.ratio_name == mapped.signal)
     time, values = signal.time, signal.values
     def check_gaps(trace):
         steps = np.diff(trace.time)
@@ -224,7 +232,7 @@ def read_recording(path, cfg: ChannelConfig):
     check_gaps(signal)
     control = None
     if mapped.control:
-        if mapped.control not in channels or mapped.control == mapped.signal or channels[mapped.control].role == "marker":
+        if mapped.control not in channels or mapped.control == signal.name or channels[mapped.control].role in ("marker", "ratio"):
             raise ValueError(f"Invalid reference channel: {mapped.control}")
         reference = channels[mapped.control]
         check_gaps(reference)
@@ -257,7 +265,10 @@ def read_recording(path, cfg: ChannelConfig):
         markers.update(on)
         offsets.update(off)
     raw = RawData(time, values, control, fs, markers, offsets, str(path),
-                  {"group": mapped.group, "signal": mapped.signal, "control": mapped.control, "time": "seconds"})
+                  {"group": mapped.group, "signal": signal.name, "control": mapped.control, "time": "seconds",
+                   "preview_signal": mapped.signal})
+    if mapped.control:
+        raw.channel_names["control_role"] = channels[mapped.control].role
     raw.apply_indicator(cfg.indicator, signal.indicator)
     if signal.ratio is not None:
         raw.exported_dff = signal.ratio

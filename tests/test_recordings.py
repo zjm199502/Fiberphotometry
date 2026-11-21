@@ -35,7 +35,7 @@ def test_plexon_batch_discovery_and_mapping(tmp_path):
     assert raw.fs == pytest.approx(50)
     np.testing.assert_allclose(raw.markers["Input1"], [.02])
     np.testing.assert_allclose(raw.marker_offsets["Input1"], [.04])
-    assert "F0_465_F1" not in [c.name for c in inspect_recording(path)]
+    assert "F0_465_F1" in [c.name for c in inspect_recording(path)]
     cfg.channels.marker_file = ""
     cfg.plot.formats, cfg.plot.dpi = ["png"], 72
     result, = run_batch([tmp_path], cfg, tmp_path / "results")
@@ -98,6 +98,14 @@ def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path):
     window.step_read()
     qtbot.waitUntil(lambda: not window._busy, timeout=10000)
     assert window.A.indicator == "GCaMP" and window.A.indicator_source == "default"
+    window.cb_signal.setCurrentText("R_1")
+    window.cb_control.setCurrentText("F0_1")
+    window.step_read()
+    qtbot.waitUntil(lambda: not window._busy, timeout=10000)
+    primary, secondary = window.fig_raw.canvas.figure.axes
+    np.testing.assert_allclose(primary.lines[0].get_ydata(), ratio, atol=1e-15)
+    np.testing.assert_allclose(secondary.lines[0].get_ydata(), 53.)
+    np.testing.assert_allclose(window.A.signal, 55 + np.cos(t))
     window.form_deconv.editors["enabled"].setChecked(False)
     window.step_pre()
     qtbot.waitUntil(lambda: not window._busy, timeout=10000)

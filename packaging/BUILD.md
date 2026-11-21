@@ -26,9 +26,15 @@ pyinstaller packaging/fiberphoto.spec --noconfirm
 
 结果 / Output:
 
-- Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。使用 Inno Setup 运行 `iscc /DAppVersion=0.5.0 packaging/windows_installer.iss` 生成 Setup.exe。
-- macOS: `dist/fiberphoto.app`。在 Apple silicon Mac 上运行 `bash packaging/make_dmg.sh 0.5.0 AppleSilicon` 生成 DMG。
+- Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。使用 Inno Setup 运行 `iscc /DAppVersion=0.6.0 packaging/windows_installer.iss` 生成 Setup.exe。
+- macOS: `dist/fiberphoto.app`。在 Apple silicon Mac 上运行 `bash packaging/make_dmg.sh 0.6.0 AppleSilicon` 生成 DMG。
 
+
+## 发布基础安装版及软件内补丁
+
+- 基础安装版使用 `vX.Y.0` 标签，版本号与源码、发布说明保持一致。两个平台的安装版通过验收后，工作流上传安装包，并更新 `updates` 分支的 `channel.json`。
+- 兼容的小版本使用 `X.Y.1` 至 `X.Y.20`。更新 main 的源码和版本号后，在 Actions 中从 main 运行 **Publish in-app patch**。工作流在 Windows 和 macOS 的已发布基础安装版上加载补丁并运行分析，成功后才公开清单和带 SHA-256 的补丁包。启动器、运行依赖或打包配置变更需要发布新的基础安装版。
+- 用户打开“帮助 → 检查更新”读取通道，确认后下载。补丁经校验后存入当前用户目录，重启生效。
 
 ## 更新用户手册 / Updating the manual
 

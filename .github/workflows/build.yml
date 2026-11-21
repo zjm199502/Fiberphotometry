@@ -69,15 +69,21 @@ jobs:
               throw "$file exited with $($p.ExitCode)"
             }
           }
-          if ($env:GITHUB_REF -eq 'refs/tags/v0.5.0') {
-            $previous = Join-Path $env:RUNNER_TEMP 'FiberPhoto-0.4.0-Windows-Setup.exe'
-            Invoke-WebRequest "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v0.4.0/FiberPhoto-0.4.0-Windows-Setup.exe" -OutFile $previous
-            if ((Get-FileHash $previous).Hash -ne 'f9257810cea56b2c30656b9e5b27233c98c6fce0752ab0e9bb0e4a28866b400e') { throw 'Unexpected 0.4.0 installer digest' }
+          if ($env:GITHUB_REF -eq 'refs/tags/v0.6.0') {
+            $previous = Join-Path $env:RUNNER_TEMP 'FiberLume-0.5.0-Windows-Setup.exe'
+            Invoke-WebRequest "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v0.5.0/FiberLume-0.5.0-Windows-Setup.exe" -OutFile $previous
+            if ((Get-FileHash $previous).Hash -ne 'a0f3febbc7a790105da9fbb1a35b16743abe36db2bb8ef155db76f7958dbf2ae') { throw 'Unexpected 0.5.0 installer digest' }
             Invoke-Checked $previous "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`""
           }
           1..2 | ForEach-Object {
             Invoke-Checked $setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`""
             Invoke-Checked "$dir/fiberphoto.exe" "--verify-install `"$qa`""
+          }
+          if ($env:VER.EndsWith('.0')) {
+            python packaging/patch_channel.py probe "$qa"
+            if ($LASTEXITCODE) { throw 'Patch staging failed' }
+            Invoke-Checked "$dir/fiberphoto.exe" "--verify-install `"$qa`""
+            if ((Get-Content "$qa/running-version.txt") -ne (Get-Content "$qa/expected-version.txt")) { throw 'Patch activation failed' }
           }
           Invoke-Checked "$dir/unins000.exe" '/VERYSILENT /NORESTART'
           if ((Test-Path "$dir/fiberphoto.exe") -or !(Test-Path "$qa/data/mouse01_session1.tdms")) {
@@ -95,6 +101,11 @@ jobs:
             cat "$RUNNER_TEMP/fiberphoto-qa/verify-error.txt"
             exit 1
           }
+          if [[ "$VER" == *.0 ]]; then
+            python packaging/patch_channel.py probe "$RUNNER_TEMP/fiberphoto-qa"
+            "$mount/FiberLume.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/fiberphoto-qa"
+            cmp "$RUNNER_TEMP/fiberphoto-qa/expected-version.txt" "$RUNNER_TEMP/fiberphoto-qa/running-version.txt"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: FiberLume-${{ env.VER }}-${{ runner.os }}-${{ matrix.arch }}
@@ -102,7 +113,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '.0')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -122,3 +133,5 @@ jobs:
           mac="installers/FiberLume-$version-macOS-AppleSilicon.dmg"
           test -s "$win" && test -s "$mac"
           gh release create "$GITHUB_REF_NAME" "$win" "$mac" --verify-tag --title "FiberLume $version" --notes-file "packaging/releases/$version.md"
+      - name: Activate update channel
+        run: bash packaging/publish_channel.sh

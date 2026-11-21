@@ -9,11 +9,17 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 root = Path(SPECPATH).parent
+import ast
+base = next(ast.literal_eval(n.value) for n in ast.parse((root / "src/fiberphoto/__init__.py").read_text()).body
+            if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "__version__")
+base_file = Path(workpath) / "fiberlume-base.txt"
+base_file.parent.mkdir(parents=True, exist_ok=True)
+base_file.write_text(base, encoding="ascii")
 
 a = Analysis(
     [str(root / "packaging" / "launch.py")],
     pathex=[str(root / "src")],
-    datas=[(str(root / "src" / "fiberphoto" / "gui" / sub), f"fiberphoto/gui/{sub}") for sub in ("manual", "assets")],
+    datas=[(str(base_file), ".")] + [(str(root / "src" / "fiberphoto" / "gui" / sub), f"fiberphoto/gui/{sub}") for sub in ("manual", "assets")],
     hiddenimports=collect_submodules("oasis") + collect_submodules("nptdms") + ["openpyxl"],
     excludes=["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtPdf", "tkinter", "IPython"],

@@ -4,6 +4,8 @@ from __future__ import annotations
 import traceback
 from typing import Any, Callable
 
+import numpy as np
+from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import QObject, QRunnable, Qt, Signal
@@ -160,6 +162,96 @@ class ParamForm(QWidget):
             setattr(getattr(cfg, s.section), s.name, v)
 
 
+class PreviewCanvas(FigureCanvasQTAgg):
+    """Direct manipulation in display coordinates, including log and inverted axes."""
+
+    def __init__(self, figure):
+        super().__init__(figure)
+        self._drag = None
+        self._moved = False
+        self.mpl_connect("button_press_event", self._press)
+        self.mpl_connect("motion_notify_event", self._move)
+        self.mpl_connect("button_release_event", self._release)
+        self.mpl_connect("scroll_event", self._scroll)
+        self.setToolTip("左键或中键平移，右键拖动缩放，滚轮缩放，Home 恢复全图。\n"
+                        "Left/middle drag to pan, right drag to scale, scroll to zoom. Home resets.")
+
+    def _target(self, event):
+        if self.toolbar is None or self.toolbar.mode or not self.widgetlock.available(self):
+            return None
+        axes = [ax for ax in self.figure.axes if ax.get_visible() and ax.get_navigate()
+                and ax.name == "rectilinear" and getattr(ax, "_colorbar", None) is None]
+        if event.inaxes in axes:
+            return event.inaxes, (True, True)
+        if event.inaxes is None:
+            renderer = self.get_renderer()
+            for ax in axes:
+                for axis, mask in ((ax.xaxis, (True, False)), (ax.yaxis, (False, True))):
+                    box = axis.get_tightbbox(renderer)
+                    if box is not None and box.contains(event.x, event.y):
+                        return ax, mask
+        return None
+
+    def _press(self, event):
+        target = self._target(event)
+        if not target or event.button not in (MouseButton.LEFT, MouseButton.MIDDLE, MouseButton.RIGHT):
+            return
+        ax, mask = target
+        self._drag = (ax, mask, event.button, np.array([event.x, event.y]),
+                      ax.bbox.get_points().copy(), ax.transData.frozen().inverted())
+        self._moved = False
+
+    def _limits(self, ax, mask, pixels, inverse):
+        limits = inverse.transform(pixels)
+        if not np.isfinite(limits).all() or np.any(limits[0] == limits[1]):
+            return
+        if mask[0]:
+            ax.set_xlim(limits[:, 0])
+        if mask[1]:
+            ax.set_ylim(limits[:, 1])
+        self.draw_idle()
+
+    def _move(self, event):
+        if self._drag is None:
+            return
+        ax, mask, button, anchor, bounds, inverse = self._drag
+        delta = np.array([event.x, event.y]) - anchor
+        if not self._moved:
+            if max(abs(delta)) < 3 * self.device_pixel_ratio:
+                return
+            if self.toolbar._nav_stack() is None:
+                self.toolbar.push_current()
+            self._moved = True
+        if button == MouseButton.RIGHT:
+            # Matplotlib display y increases upwards; use logical screen pixels.
+            factor = 1.02 ** np.clip(-delta / self.device_pixel_ratio, -500, 500)
+            pixels = anchor + (bounds - anchor) * factor
+        else:
+            pixels = bounds - delta
+        self._limits(ax, mask, pixels, inverse)
+
+    def _release(self, event):
+        if self._drag and event.button == self._drag[2]:
+            self._move(event)
+            if self._moved:
+                self.toolbar.push_current()
+            self._drag = None
+            self._moved = False
+
+    def _scroll(self, event):
+        target = self._target(event)
+        if not target or not event.step:
+            return
+        ax, mask = target
+        anchor = np.array([event.x, event.y])
+        factor = 1.02 ** np.clip(-15 * event.step, -500, 500)
+        if self.toolbar._nav_stack() is None:
+            self.toolbar.push_current()
+        pixels = anchor + (ax.bbox.get_points() - anchor) * factor
+        self._limits(ax, mask, pixels, ax.transData.inverted())
+        self.toolbar.push_current()
+
+
 class FigureView(QWidget):
     """A matplotlib figure with the zoom/pan toolbar; the figure can be swapped."""
 
@@ -188,7 +280,7 @@ class FigureView(QWidget):
             self.placeholder.show()
             return
         self.placeholder.hide()
-        self.canvas = FigureCanvasQTAgg(fig)
+        self.canvas = PreviewCanvas(fig)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setIconSize(self.toolbar.iconSize() * 0.8)
         self.lay.addWidget(self.toolbar)

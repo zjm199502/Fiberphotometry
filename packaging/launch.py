@@ -1,14 +1,14 @@
 """Entry script for the frozen application."""
 import sys
 
-from fiberphoto.gui.app import main
+from fiberlume_boot import activate
 
 def verify_install(folder):
     import pandas as pd
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
 
-    from fiberphoto import PipelineConfig, run_file
+    from fiberphoto import PipelineConfig, __version__, run_file
     from fiberphoto.gui.main_window import MainWindow, manual_path
     from fiberphoto.sample_data import make_sample_dataset
 
@@ -41,10 +41,16 @@ def verify_install(folder):
     imported = run_file(export, cfg, folder / "plexon-results")
     if imported.error or imported.C is None or imported.B.method != "Plexon R_1":
         raise RuntimeError(imported.error or "Incomplete Plexon analysis")
+    if not window.a_update.isEnabled():
+        raise RuntimeError("Update action unavailable")
+    (folder / "running-version.txt").write_text(__version__, encoding="ascii")
     window.close()
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+    qa_folder = Path(sys.argv[2]) if sys.argv[1:2] == ["--verify-install"] else None
+    active_patch = activate(qa_folder / "patches" if qa_folder is not None else None)
     if sys.argv[1:2] == ["--verify-install"]:
         import traceback
         from pathlib import Path
@@ -57,4 +63,10 @@ if __name__ == "__main__":
             (folder / "verify-error.txt").write_text(traceback.format_exc(), encoding="utf-8")
             sys.exit(1)
     else:
-        sys.exit(main())
+        try:
+            from fiberphoto.gui.app import main
+            sys.exit(main())
+        except Exception:
+            if active_patch:
+                (active_patch / ".disabled").touch()
+            raise

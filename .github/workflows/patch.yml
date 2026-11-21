@@ -1,0 +1,65 @@
+name: Publish in-app patch
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[gui,test]"
+      - run: python -m pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Check compatibility and prepare update
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=$(python -c "import fiberphoto as f; from fiberlume_boot import compatible; b=f.__version__.rsplit('.',1)[0]+'.0'; assert compatible(f.__version__,b); print(b)")
+          git diff --exit-code "v$BASE" HEAD -- src/fiberlume_boot.py packaging/launch.py packaging/fiberphoto.spec
+          git show "v$BASE:pyproject.toml" > "$RUNNER_TEMP/base.toml"
+          python -c "import sys,tomllib as t; a,b=[t.load(open(p,'rb')) for p in sys.argv[1:]]; a['project'].pop('version'); b['project'].pop('version'); assert a==b,'Base package configuration changed'" "$RUNNER_TEMP/base.toml" pyproject.toml
+          echo "BASE=$BASE" >> "$GITHUB_ENV"
+          python packaging/patch_channel.py stage "$RUNNER_TEMP/patch-qa"
+      - name: Verify patch on published Windows base
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $dir="$env:RUNNER_TEMP/FiberLume"
+          $qa="$env:RUNNER_TEMP/patch-qa"
+          $setup="$env:RUNNER_TEMP/base.exe"
+          Invoke-WebRequest "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v$env:BASE/FiberLume-$env:BASE-Windows-Setup.exe" -OutFile $setup
+          $p=Start-Process $setup -ArgumentList "/VERYSILENT /CURRENTUSER /DIR=`"$dir`"" -Wait -PassThru
+          if ($p.ExitCode) { throw 'Installation failed' }
+          $p=Start-Process "$dir/fiberphoto.exe" -ArgumentList "--verify-install `"$qa`"" -Wait -PassThru
+          if ($p.ExitCode -or (Get-Content "$qa/running-version.txt") -ne (Get-Content "$qa/expected-version.txt")) { throw 'Activation failed' }
+      - name: Verify patch on published macOS base
+        if: runner.os == 'macOS'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/v$BASE/FiberLume-$BASE-macOS-AppleSilicon.dmg" -o "$RUNNER_TEMP/base.dmg"
+          mount="$RUNNER_TEMP/mounted"
+          hdiutil attach "$RUNNER_TEMP/base.dmg" -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          "$mount/FiberLume.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/patch-qa"
+          cmp "$RUNNER_TEMP/patch-qa/expected-version.txt" "$RUNNER_TEMP/patch-qa/running-version.txt"
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash packaging/publish_channel.sh

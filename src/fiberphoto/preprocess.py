@@ -103,6 +103,8 @@ def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
             raise ValueError("Invalid Plexon R values; select raw recalculation / R 列含无效值，请选择从原始荧光重算")
         return DffData(t, raw.exported_dff.copy(), fs, sig, raw.exported_f0,
                        f"Plexon {raw.channel_names['exported_dff']}", "ratio")
+    if raw.channel_names.get("control_role") == "baseline":
+        ctl = None  # F0 is a preview baseline, not an independently measured control
     trim_start = cfg.trim_start_s
     if cfg.auto_trim:
         onset = detect_led_onset(sig, fs)

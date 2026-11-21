@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         self.a_about = QAction(self, triggered=self.show_about)
         self.m_help.addAction(self.a_manual)
         self.m_help.addAction(self.a_guide)
+        self.a_update = QAction(self, triggered=self.check_update)
+        self.m_help.addAction(self.a_update)
         self.m_help.addAction(self.a_about)
 
         # language switch also lives in the corner for discoverability
@@ -444,6 +446,7 @@ class MainWindow(QMainWindow):
         self.m_file.setTitle(t("menu_file"))
         self.m_lang.setTitle(t("menu_lang"))
         self.m_help.setTitle(t("menu_help"))
+        self.a_update.setText("检查更新…" if self.lang == "zh" else "Check for updates…")
         for a, k in ((self.a_add, "act_add_files"), (self.a_folder, "act_add_folder"),
                      (self.a_sample, "act_sample"), (self.a_load, "act_load_params"),
                      (self.a_save, "act_save_params"), (self.a_reset, "act_reset_params"),
@@ -730,8 +733,11 @@ class MainWindow(QMainWindow):
         names = [c.name for c in self.channel_infos if c.group == g]
         vendor = self.current and self.current.suffix.lower() != ".tdms"
         all_names = [c.name for c in self.channel_infos if not vendor or (c.group == g and c.guess == "marker")]
+        controls = names
         if vendor:
-            names = [c.name for c in self.channel_infos if c.group == g and c.guess != "marker"]
+            local = [c for c in self.channel_infos if c.group == g]
+            names = [c.name for c in local if c.guess not in ("marker", "baseline")]
+            controls = [c.name for c in local if c.guess not in ("marker", "ratio")]
         if guess is None:
             guess = auto_map(self.channel_infos, type(self.cfg.channels)(group=g))
         pick = lambda saved, fallback, pool: saved if saved and saved in pool else fallback
@@ -739,7 +745,7 @@ class MainWindow(QMainWindow):
         live = [n for n in names if n not in flat]
         sig_guess = guess.signal if guess.signal not in flat else (live[0] if live else guess.signal)
         sig = pick(prefer.signal if prefer else "", sig_guess, names)
-        ctl = pick(prefer.control if prefer else "", guess.control if guess.control not in flat else "", names)
+        ctl = pick(prefer.control if prefer else "", guess.control if guess.control not in flat else "", controls)
         if prefer and prefer.group == g and not prefer.auto_control and not prefer.control:
             ctl = ""
         markers = [m for m in (prefer.markers if prefer else []) if m in all_names] or \
@@ -753,7 +759,7 @@ class MainWindow(QMainWindow):
             self.cb_signal.setCurrentIndex(-1)
         self.cb_control.clear()
         self.cb_control.addItem(self.t("none"), "")
-        for n in names:
+        for n in controls:
             self.cb_control.addItem(n, n)
         self.cb_control.setCurrentIndex(max(0, self.cb_control.findData(ctl)) if ctl else 0)
         self.lst_markers.clear()
@@ -1059,6 +1065,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- misc
     def _set_busy(self, busy: bool):
         self._busy = busy
+        self.a_update.setEnabled(not busy)
         self.files_box.setEnabled(not busy)
         self.m_file.setEnabled(not busy)
         self.m_lang.setEnabled(not busy)
@@ -1095,6 +1102,47 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, self.t("act_manual"), self.t("manual_missing"))
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf)))
+
+    def check_update(self):
+        from fiberlume_boot import base_version
+        from .. import updates
+
+        base = base_version()
+        zh = self.lang == "zh"
+        title = self.a_update.text().rstrip("…")
+
+        def checked(result):
+            kind, manifest = result
+            tag = manifest["version"]
+            detail = f"FiberLume {__version__} → {tag}"
+            if kind == "current":
+                QMessageBox.information(self, title, f"FiberLume {__version__}\n" +
+                                        ("已是当前版本。" if zh else "You are up to date."))
+                return
+            if kind == "installer":
+                prompt = "需要安装新的基础版。打开正式下载页？" if zh else "A new base installer is required. Open the release page?"
+                if QMessageBox.question(self, title, detail + "\n" + prompt) == QMessageBox.Yes:
+                    QDesktopServices.openUrl(QUrl(updates.RELEASES + manifest["base"]))
+                return
+            prompt = "下载并应用补丁？下次启动生效。" if zh else "Download and apply the patch on the next launch?"
+            if QMessageBox.question(self, title, detail + "\n" + prompt) == QMessageBox.Yes:
+                self._run(lambda: updates.stage(manifest, __version__, base), installed)
+
+        def installed(tag):
+            import os
+            import subprocess
+            import sys
+
+            msg = f"{tag} 已准备好。立即重启？" if zh else f"{tag} is ready. Restart now?"
+            if QMessageBox.question(self, title, msg) == QMessageBox.Yes:
+                try:
+                    subprocess.Popen([sys.executable], env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+                except OSError as exc:
+                    self.error(str(exc))
+                    return
+                self.close()
+
+        self._run(lambda: updates.check(__version__, base), checked)
 
     def show_about(self):
         QMessageBox.about(self, self.t("act_about"), self.t("about_text", ver=__version__))

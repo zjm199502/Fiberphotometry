@@ -73,11 +73,13 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
     nrow = 2 if a.control is not None else 1
     fig, axes = plt.subplots(nrow, 1, figsize=(10, 2.2 * nrow), sharex=True, squeeze=False)
     axes = axes[:, 0]
-    axes[0].plot(a.time, a.signal, color=C_SIGNAL, lw=0.6)
-    axes[0].set_ylabel(f"{a.indicator}\n{tr('signal', lang)}")
+    name = a.channel_names.get("preview_signal") or a.channel_names.get("signal", "")
+    ratio = a.exported_dff is not None and name == a.channel_names.get("exported_dff")
+    axes[0].plot(a.time, a.exported_dff if ratio else a.signal, color=C_SIGNAL, lw=0.6)
+    axes[0].set_ylabel(f"{name}\nΔF/F (ratio)" if ratio else f"{a.indicator}\n{name}")
     if a.control is not None:
         axes[1].plot(a.time, a.control, color=C_CONTROL, lw=0.6)
-        axes[1].set_ylabel(tr("control", lang))
+        axes[1].set_ylabel(f"{tr('control', lang)}\n{a.channel_names.get('control', '')}")
     for ax in axes:
         for k, (label, on) in enumerate(a.markers.items()):
             col = MARKER_COLORS[k % len(MARKER_COLORS)]

@@ -26,11 +26,17 @@ core plus a bilingual (Chinese/English) desktop app for users without programmin
 
 钙成像光纤记录分析软件：批处理核心 + 中英双语桌面界面，面向没有编程基础的使用者。
 
-## 0.5.0 安装版 / Installation
+## 0.6.0 安装版 / Installation
 
-[Windows x64 安装程序](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.5.0/FiberLume-0.5.0-Windows-Setup.exe) · [macOS Apple silicon 安装镜像](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.5.0/FiberLume-0.5.0-macOS-AppleSilicon.dmg)
+[Windows x64 安装程序](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.6.0/FiberLume-0.6.0-Windows-Setup.exe) · [macOS Apple silicon 安装镜像](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.6.0/FiberLume-0.6.0-macOS-AppleSilicon.dmg)
 
-Windows 双击 Setup，完成后从开始菜单打开 FiberLume。使用 0.4.0 的用户可直接覆盖安装。macOS 打开 DMG，将 FiberLume 拖入 Applications。两个安装包都包含 Python 和分析依赖。
+从 0.5.0 或更早版本升级，请先下载安装版。Windows 双击 Setup 覆盖安装，macOS 打开 DMG，将 FiberLume 拖入 Applications。两个安装包都包含 Python 和分析依赖。
+
+从 0.6.0 开始，打开“帮助 → 检查更新”可查询正式通道。有兼容补丁时，确认下载后，软件会核验 SHA-256 并保存补丁。可立即重启，也可在下次启动时生效。需要更换基础版本时，菜单会引导用户下载完整安装包。
+
+在“数据读取”页，Plexon 钙信号可选择 `RawF_1`（原始荧光）或 `R_1`（设备 ΔF/F），对照通道可选 `F0_1`（设备基线）。选好后点击“读取”刷新预览。切换预览不会改变预处理页的 ΔF/F 来源设置。
+
+在预览图内按住左键或中键拖动可平移，按住右键拖动可围绕按下的位置缩放。向右拖放大横轴，向上拖放大纵轴。滚轮围绕指针缩放，在坐标轴刻度处操作只改变该轴。工具栏的主页按钮可恢复全图。
 
 ## 从源码启动 / Run from source
 
