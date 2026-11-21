@@ -152,13 +152,15 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
             p = analysis.peri_event(b, onsets, cfg.peth, marker)
             res.peth = p
             log(tr("log_peth", lang, marker=marker, n=len(p.trials)))
+            if p.skipped_incomplete_pre:
+                log(tr("log_nonfinite_pre", lang, n=p.skipped_incomplete_pre))
             for kind in ("z", "dff"):
                 trials = p.get(kind)
                 pd.DataFrame(trials.T, index=pd.Index(np.round(p.t_rel, 6), name="t_rel_s"),
                              columns=[f"trial_{i + 1}" for i in range(len(trials))]
                              ).assign(mean=p.mean(kind), sem=p.sem(kind)
-                                      ).to_csv(out / f"peth_trials_{kind}.csv", float_format="%.6g")
-            p.metrics.to_csv(out / "peth_metrics.csv", index=False, float_format="%.6g")
+                                      ).to_csv(out / f"peth_trials_{kind}.csv", float_format="%.17g")
+            p.metrics.to_csv(out / "peth_metrics.csv", index=False, float_format="%.17g")
             if len(p.metrics):
                 summary["peth_n_trials"] = len(p.trials)
                 summary["peth_latency_mean_s"] = float(p.metrics["peak_latency_s"].mean())

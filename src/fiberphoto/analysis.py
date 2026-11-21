@@ -33,10 +33,11 @@ class PethResult:
     marker: str
     t_rel: np.ndarray          # seconds relative to stimulus
     trials_z: np.ndarray       # (n_trials, n_samples), z-scored to each trial's baseline window
-    trials_dff: np.ndarray     # (n_trials, n_samples), ΔF/F straight from data B
+    trials_dff: np.ndarray     # data B minus the mean of each trial’s entire pre-stimulus segment
     onsets: np.ndarray         # stimulus times actually used
     metrics: pd.DataFrame      # one row per trial
-    dff_unit: str              # unit of data B ("%" or "z")
+    dff_unit: str              # unit of data B (e.g. ratio, % or z)
+    skipped_incomplete_pre: int = 0  # complete time windows with a nonfinite pre-stimulus value
 
     @property
     def trials(self) -> np.ndarray:
@@ -71,10 +72,13 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
 
     The baseline window [baseline_start_s, baseline_end_s) and the target window
     [response_start_s, response_end_s] are both set in seconds relative to the
-    stimulus. AUC is the trapezoid integral over each window (unit × s).
+    stimulus. ΔF/F is centered on the entire pre-stimulus segment, excluding t=0.
+    AUC is the trapezoid integral over each window (unit × s).
     """
     onsets = merge_close(onsets, cfg.min_interval_s)
     n_pre = int(round(cfg.pre_s * b.fs))
+    if n_pre < 1:
+        raise ValueError("刺激前时长须包含至少一个采样点。Increase the pre-stimulus window to include at least one sample.")
     n_post = int(round(cfg.post_s * b.fs))
     t_rel = np.arange(-n_pre, n_post + 1) / b.fs
     base_m = (t_rel >= cfg.baseline_start_s) & (t_rel < cfg.baseline_end_s)
@@ -82,26 +86,33 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
     dt = 1.0 / b.fs
 
     zs, dffs, used, rows = [], [], [], []
+    skipped_incomplete_pre = 0
     for t0 in onsets:
         i = int(np.searchsorted(b.time, t0))
         if i - n_pre < 0 or i + n_post >= b.dff.size:
             continue  # window falls outside the recording
         seg = b.dff[i - n_pre: i + n_post + 1].astype(float)
+        pre = seg[:n_pre]
+        if not np.isfinite(pre).all():
+            skipped_incomplete_pre += 1
+            continue
+        pre_mean = float(pre.mean())
+        centered = seg - pre_mean
         base = seg[base_m]
         sd = np.std(base, ddof=1) if base.size > 1 else 0.0
         z = (seg - (base.mean() if base.size else 0.0)) / (sd if sd > 0 else 1.0)
         zs.append(z)
-        dffs.append(seg)
+        dffs.append(centered)
         used.append(t0)
         targ = z[targ_m]
-        row = {"trial": len(zs), "onset_s": t0,
+        row = {"trial": len(zs), "onset_s": t0, "prestimulus_mean_input_dff": pre_mean,
                "peak_latency_s": float(t_rel[targ_m][int(np.argmax(targ))]) if targ.size else np.nan}
         row |= _window_metrics(z, t_rel, base_m, targ_m, dt, "z")
-        row |= _window_metrics(seg, t_rel, base_m, targ_m, dt, "dff")
+        row |= _window_metrics(centered, t_rel, base_m, targ_m, dt, "dff")
         rows.append(row)
     empty = np.empty((0, t_rel.size))
     return PethResult(marker, t_rel, np.vstack(zs) if zs else empty, np.vstack(dffs) if dffs else empty,
-                      np.array(used), pd.DataFrame(rows), b.unit)
+                      np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre)
 
 
 @dataclass

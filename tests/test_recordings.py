@@ -126,6 +126,15 @@ def test_plexon_numbered_ratio_switch_and_roundtrip(qtbot, tmp_path, monkeypatch
     np.testing.assert_allclose(window.B.reference, 53.)
     h5 = save_stage(tmp_path / "record.h5", "A", window.A)
     np.testing.assert_array_equal(load_stage(h5, "A").exported_dff, window.B.dff)
+    center = window.form_dedrift.editors["center_window_s"]
+    assert not center.isHidden()
+    center.setValue(5.)
+    window.step_pre()
+    qtbot.waitUntil(lambda: not window._busy, timeout=10000)
+    assert "centered 5 s window" in prompts[-1]
+    np.testing.assert_allclose(window.B.dff + window.B.dff_center_baseline, ratio, atol=1e-15)
+    assert window.B.unit == "ratio" and "median(X(u)" in window.log_view.toPlainText()
+    center.setValue(0.)
     window.form_dedrift.editors["prefer_plexon_dff"].setChecked(False)
     window.form_dedrift.editors["method"].setCurrentIndex(2)
     window.step_pre()

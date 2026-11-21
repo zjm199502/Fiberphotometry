@@ -51,6 +51,7 @@ class DedriftConfig:
     baseline_end_s: float = 0.0  # fixed F0 requires a deliberately selected, nonempty interval
     signal_start_s: Optional[float] = None  # explicit acquisition-clock window used for analysis
     signal_end_s: Optional[float] = None
+    center_window_s: float = 0.0    # subtract a centered rolling median of ΔF/F; 0 = off
 
 
 @dataclass

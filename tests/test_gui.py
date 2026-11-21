@@ -52,6 +52,67 @@ def test_full_walkthrough(qtbot, window):
     assert not w.shown
 
 
+def test_clear_page_preserves_other_results_and_parameters(qtbot, window, tmp_path):
+    w = window
+    assert not any(button.isEnabled() for button in w.clear_buttons.values())
+    for step in (w.step_read, w.step_pre, w.step_peth, w.step_events):
+        run(qtbot, w, step)
+    w._set_busy(True)
+    assert not any(button.isEnabled() for button in w.clear_buttons.values())
+    w.clear_page_results("read")
+    assert w.A is not None and w.peth is not None
+    w._set_busy(False)
+    peth, peth_canvas = w.peth, w.fig_peth.canvas
+    w.clear_buttons["events"].click()
+    assert w.events is w.stim_events is w.fig_events.canvas is w.fig_dist.canvas is w.fig_rate.canvas is None
+    assert not w.lbl_events.text() and not w.clear_buttons["events"].isEnabled()
+    assert w.peth is peth and w.fig_peth.canvas is peth_canvas
+    run(qtbot, w, w.step_events)
+    events, event_canvas = w.events, w.fig_events.canvas
+    w.clear_buttons["peth"].click()
+    assert w.peth is w.fig_peth.canvas is w.fig_peth_dff.canvas is w.fig_auc.canvas is None
+    assert w.trial_table.rowCount() == 0 and not w.clear_buttons["peth"].isEnabled()
+    assert w.events is events and w.fig_events.canvas is event_canvas
+    run(qtbot, w, w.step_peth)
+
+    w.chk_fmt["pdf"].setChecked(False)
+    w.spin_dpi.setValue(72)
+    run(qtbot, w, w.export_current)
+    report = tmp_path / "out" / w.current.stem / "analysis_methods.json"
+    assert report.is_file() and w.lbl_export.text() and w.clear_buttons["export"].isEnabled()
+    w.clear_buttons["export"].click()
+    assert report.is_file() and not w.lbl_export.text() and w.progress.value() < 0
+    assert w.peth is not None and w.events is events
+
+    raw, raw_canvas = w.A, w.fig_raw.canvas
+    w.clear_buttons["pre"].click()
+    assert w.A is raw and w.fig_raw.canvas is raw_canvas
+    assert w.B is w.C is w.peth is w.events is w.stim_events is None
+    assert w.fig_dedrift.canvas is w.fig_deconv.canvas is None
+    assert not w.lbl_pre.text() and not w.lbl_events.text() and not w.trial_table.rowCount()
+    w.cb_marker_use.setCurrentText("DI2_Lick")
+    w.form_dedrift.editors["signal_start_s"].setValue(10.0)
+    w.form_dedrift.editors["signal_end_s"].setValue(120.0)
+    w.form_peth.editors["pre_s"].setValue(3.0)
+    w.clear_buttons["read"].click()
+    assert w.current.is_file() and w.A is None and w.fig_raw.canvas is None
+    assert w.chan_table.rowCount() > 0 and not w.cb_marker_use.count()
+    w.file_list.setCurrentRow(1)
+    run(qtbot, w, w.step_read)
+    other_raw = w.A
+    w.file_list.setCurrentRow(0)
+    assert w.A is w.B is w.peth is w.events is None and not w.clear_buttons["read"].isEnabled()
+    run(qtbot, w, w.step_read)
+    assert w.cb_marker_use.currentText() == "DI2_Lick"
+    assert w.form_dedrift.editors["signal_start_s"].value() == 10
+    assert w.form_dedrift.editors["signal_end_s"].value() == 120
+    assert w.form_peth.editors["pre_s"].value() == 3
+    run(qtbot, w, w.step_pre)
+    assert w.B is not None and w.clear_buttons["pre"].isEnabled()
+    w.file_list.setCurrentRow(1)
+    assert w.A is other_raw
+
+
 def test_close_during_analysis(qtbot, window):
     from threading import Event
 

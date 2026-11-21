@@ -111,7 +111,12 @@ def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
     _stim_lines(ax2, onsets, tr("stimulus", lang))
     ax2.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax2.set_xlabel(tr("time_s", lang))
-    ax1.set_title(f"{tr('dedrift_title', lang)} · {b.method}", loc="left")
+    title = f"{tr('dedrift_title', lang)} · {b.method}"
+    window = b.formula_info.get("center_window_s", 0)
+    if window:
+        title += f" · {window:g} s " + ("滑动中位数校正" if lang == "zh" else "rolling median correction")
+        ax2.axhline(0, color=INK_2, lw=.7, ls="--", zorder=0)
+    ax1.set_title(title, loc="left")
     fig.tight_layout()
     return fig
 
@@ -155,9 +160,10 @@ def _shade_windows(ax, cfg_peth, lang="zh"):
 
 
 def _kind_label(kind: str, dff_unit: str, lang: str) -> str:
-    if kind == "z" or dff_unit == "z":
-        return tr("zscore", lang)
-    return f"ΔF/F ({dff_unit})"
+    if kind == "z":
+        return tr("peth_z", lang)
+    unit = tr("zscore", lang) if dff_unit == "z" else f"ΔF/F ({dff_unit})"
+    return tr("peth_centered", lang, unit=unit)
 
 
 def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=None, kind: str = "z") -> Figure:

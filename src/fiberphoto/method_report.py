@@ -23,6 +23,7 @@ REFERENCES = {
     "Neurophotometrics · Bonsai Guide": "https://neurophotometrics.com/s/BonsaiGuide_20221014.pdf",
     "NumPy · interp": NUMPY + "numpy.interp.html",
     "NumPy · median": NUMPY + "numpy.median.html",
+    "pandas · Series.rolling": "https://pandas.pydata.org/docs/reference/api/pandas.Series.rolling.html",
     "SciPy · Welch PSD": SCIPY + "scipy.signal.welch.html",
     "NumPy · polyfit": NUMPY + "numpy.polyfit.html",
     "SciPy · curve_fit": SCIPY + "scipy.optimize.curve_fit.html",
@@ -37,6 +38,7 @@ REFERENCES = {
     "Tukey biweight · 权重函数": "https://www.statsmodels.org/stable/generated/statsmodels.robust.norms.TukeyBiweight.weights.html",
     "Friedrich, Zhou & Paninski (2017) · OASIS": "https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1005423",
     "OASIS · 作者实现": "https://github.com/j-friedrich/OASIS",
+    "Sherathiya et al. (2021) · GuPPy 逐试次基线扣除": "https://doi.org/10.1038/s41598-021-03626-9",
 }
 
 
@@ -132,7 +134,13 @@ def _preprocess(raw, b, cfg, lang):
             refs.append("NumPy · polyfit")
         if cfg.method != b.method:
             rules.append(f"所选方法 {cfg.method} 无可用独立对照，已使用 {b.method}。")
-    return _stage("preprocess", "预处理与 ΔF/F", "preprocess._dedrift_fluorescence", params, rules, refs)
+    if b.formula_info.get("center_window_s", 0) > 0:
+        rules.append("按 data B 的采集时刻取居中时间窗，包含两端，边缘缩短到有效信号区间，逐帧减去原 ΔF/F 的窗口中位数。"
+                     "data B.dff_center_baseline 保存减去的局部基线，单位与设备比值或重算的百分比一致。")
+        if b.dff_unfiltered is not None:
+            rules.append("未低通的 ΔF/F 减去同一条局部基线，再按所选输出单位转换。")
+        refs.append("pandas · Series.rolling")
+    return _stage("preprocess", "预处理与 ΔF/F", "preprocess.dedrift", params, rules, refs)
 
 
 def _deconv(res, cfg):
@@ -178,18 +186,22 @@ def _events(res, cfg):
 def _peth(res, cfg):
     p = res.peth
     params = dict(asdict(cfg), actual_marker=p.marker, input_markers=res.summary.get("n_markers"),
-                  accepted_trials=len(p.onsets), dt_s=1/res.B.fs)
+                  accepted_trials=len(p.onsets), dt_s=1/res.B.fs,
+                  dff_centering="subtract_entire_pre_stimulus_mean", pre_samples=int((p.t_rel < 0).sum()),
+                  skipped_nonfinite_pre_trials=p.skipped_incomplete_pre)
     anchor = ("标记终点（缺失时回退到该脉冲起点）" if cfg.align_to == "offset" else "标记起点")
     rules = [f"刺激零点 = {anchor} + ({cfg.shift_s:g} s)。显式信号区间仅保留区间内的对齐时间。",
              "按时间排序后，距上一个保留标记不足 min_interval_s 的标记丢弃；取 data B 中第一帧 t ≥ 标记时间为零点。",
-             "前后分别取 round(pre_s × fs)、round(post_s × fs) 帧，越界试次丢弃。"]
+             "前后分别取 round(pre_s × fs)、round(post_s × fs) 帧。刺激前至少需一帧，越界或刺激前含非有限值的试次丢弃。",
+             "第 i 试次的 μᵢ = mean(本试次 data B[t < 0])，归零曲线 yᵢ(t) = data Bᵢ(t) − μᵢ，保留 data B 的单位。"
+             "μᵢ 写入 peth_metrics.csv 的 prestimulus_mean_input_dff 列。"]
     if len(p.onsets):
         rules += ["基线窗为 [baseline_start_s, baseline_end_s)，响应窗为 [response_start_s, response_end_s]。"
                   "逐试次 Z = (ΔF/F − 基线均值)/基线样本标准差(ddof=1)，空基线均值取 0，无有效标准差时分母取 1。",
-                  "分别在原单位和 Z 上计算窗内均值、响应窗最大值及 AUC = Σ(yᵢ+yᵢ₊₁) Δt/2；AUC 单位为对应纵轴单位 × s。潜伏期为响应窗内首次最大 Z 值的相对时间。",
+                  "分别对刺激前归零曲线和 Z 分数计算窗内均值、响应窗最大值及 AUC = Σ(yᵢ+yᵢ₊₁) Δt/2。AUC 单位为对应纵轴单位 × s。潜伏期为响应窗内首次最大 Z 值的相对时间。",
                   "逐时点跨试次均值与 SEM = 样本标准差/√有效试次数。"]
     return _stage("peth", "刺激锁定试次", "pipeline.pick_marker / analysis.peri_event", params, rules,
-                  ["SciPy · trapezoid"] if len(p.onsets) else [])
+                  ["Sherathiya et al. (2021) · GuPPy 逐试次基线扣除", "SciPy · trapezoid"] if len(p.onsets) else [])
 
 
 def _statistics(res, cfg):

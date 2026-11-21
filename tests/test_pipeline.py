@@ -100,6 +100,13 @@ def test_peth_shows_response(dataset, tmp_path):
     for kind in ("z", "dff"):
         assert (p.metrics[f"auc_target_{kind}"] > p.metrics[f"auc_baseline_{kind}"]).mean() > 0.9
     assert p.trials_dff.shape == p.trials_z.shape
+    import pandas as pd
+    exported = pd.read_csv(res.out_dir / "peth_trials_dff.csv")
+    trial_cols = [c for c in exported if c.startswith("trial_")]
+    np.testing.assert_allclose(exported[trial_cols].to_numpy().T, p.trials_dff, atol=1e-14)
+    np.testing.assert_allclose(exported.loc[exported.t_rel_s < 0, trial_cols].mean(), 0, atol=1e-12)
+    np.testing.assert_allclose(p.trials_dff[:, p.t_rel < 0].mean(axis=1), 0, atol=1e-12)
+    np.testing.assert_allclose(p.metrics["baseline_mean_dff"], 0, atol=1e-12)
     # z-scores are relative to each trial's own baseline window
     np.testing.assert_allclose(p.metrics["baseline_mean_z"], 0, atol=1e-9)
     assert 0.2 < p.metrics["peak_latency_s"].median() < 2.0

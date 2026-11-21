@@ -61,6 +61,8 @@ class RecordingViewState:
     tab: int
     pre_note: str
     export_note: str
+    export_progress: int
+    loaded_once: bool
 
 
 class MainWindow(QMainWindow):
@@ -76,6 +78,8 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._workers = set()
         self.current: Path | None = None
+        # A recording keeps its own batch settings after its in-memory data is cleared.
+        self._loaded_once = False
         self.recording_states: dict[Path, RecordingViewState] = {}
         self.channel_infos = []
         self.previews = {}
@@ -112,7 +116,7 @@ class MainWindow(QMainWindow):
         self.recording_states[self.current] = RecordingViewState(
             deepcopy(local), (self.A, self.B, self.C, self.peth, self.events, self.stim_events),
             self.channel_infos, self.previews, self.tabs.currentIndex(),
-            self.lbl_pre.text(), self.lbl_export.text())
+            self.lbl_pre.text(), self.lbl_export.text(), self.progress.value(), self._loaded_once)
 
     def _view_config(self, local):
         channels = replace(local.channels, excluded_channels=self.cfg.channels.excluded_channels)
@@ -127,6 +131,8 @@ class MainWindow(QMainWindow):
         self.forms_load()
         self.lbl_pre.setText(state.pre_note)
         self.lbl_export.setText(state.export_note)
+        self.progress.setValue(state.export_progress)
+        self._loaded_once = state.loaded_once
 
     def t(self, key, **kw):
         return ui(key, self.lang, **kw)
@@ -195,13 +201,20 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.files_empty)
         lay.addWidget(self.file_list, 1)
 
-    def _help_label(self) -> QLabel:
+    def _page_header(self, layout, page: str) -> QLabel:
         lab = QLabel()
         lab.setWordWrap(True)
         lab.setObjectName("help")
+        row = QHBoxLayout()
+        row.addWidget(lab, 1)
+        button = QPushButton(clicked=lambda: self.clear_page_results(page))
+        self.clear_buttons[page] = button
+        row.addWidget(button)
+        layout.addLayout(row)
         return lab
 
     def _build_tabs(self):
+        self.clear_buttons = {}
         self.tabs = QTabWidget()
         self.tabs.addTab(self._tab_read(), "")
         self.tabs.addTab(self._tab_pre(), "")
@@ -213,8 +226,7 @@ class MainWindow(QMainWindow):
     def _tab_read(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        self.help_read = self._help_label()
-        v.addWidget(self.help_read)
+        self.help_read = self._page_header(v, "read")
         behavior_row = QHBoxLayout()
         self.b_behavior = QPushButton(clicked=self.pick_behavior_csv)
         self.b_behavior_clear = QPushButton(clicked=lambda: self.set_behavior(None))
@@ -310,8 +322,7 @@ class MainWindow(QMainWindow):
     def _tab_pre(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        self.help_pre = self._help_label()
-        v.addWidget(self.help_pre)
+        self.help_pre = self._page_header(v, "pre")
         left = QWidget()
         lv = QVBoxLayout(left)
         self.b_choose_windows = QPushButton(clicked=self._choose_windows)
@@ -350,8 +361,7 @@ class MainWindow(QMainWindow):
     def _tab_peth(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        self.help_peth = self._help_label()
-        v.addWidget(self.help_peth)
+        self.help_peth = self._page_header(v, "peth")
         left = QWidget()
         lv = QVBoxLayout(left)
         self.box_peth = QGroupBox()
@@ -395,8 +405,7 @@ class MainWindow(QMainWindow):
     def _tab_events(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        self.help_events = self._help_label()
-        v.addWidget(self.help_events)
+        self.help_events = self._page_header(v, "events")
         left = QWidget()
         lv = QVBoxLayout(left)
         self.box_events = QGroupBox()
@@ -431,8 +440,7 @@ class MainWindow(QMainWindow):
     def _tab_export(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        self.help_export = self._help_label()
-        v.addWidget(self.help_export)
+        self.help_export = self._page_header(v, "export")
         self.box_out = QGroupBox()
         f = QFormLayout(self.box_out)
         orow = QHBoxLayout()
@@ -539,6 +547,9 @@ class MainWindow(QMainWindow):
         self.help_peth.setText(t("help_peth"))
         self.help_events.setText(t("help_events"))
         self.help_export.setText(t("help_export"))
+        for page, button in self.clear_buttons.items():
+            button.setText(t("clear_page"))
+            button.setToolTip(t(f"clear_{page}_tip"))
         # tab 1
         self.chan_box.setTitle(t("channels"))
         self.b_exclude.setText(t("exclude_channels"))
@@ -606,7 +617,7 @@ class MainWindow(QMainWindow):
         for name, editor in form.editors.items():
             if name == key:
                 continue
-            visible = not direct or name in ("signal_start_s", "signal_end_s")
+            visible = not direct or name in ("signal_start_s", "signal_end_s", "center_window_s")
             if name in ("baseline_start_s", "baseline_end_s"):
                 visible = interval
             elif name == "auto_trim" and interval:
@@ -684,7 +695,8 @@ class MainWindow(QMainWindow):
             ch.markers = ["__none__"]  # keep auto-detection from re-adding unticked channels
         ch.sampling_rate = self.fs_edit.value()
         ch.marker_file = self.marker_file.text()
-        self.cfg.peth.marker = self.cb_marker_use.currentText()
+        if self.A is not None:
+            self.cfg.peth.marker = self.cb_marker_use.currentText()
         pc = self.cfg.plot
         pc.formats = [f for f, c in self.chk_fmt.items() if c.isChecked()] or ["png"]
         pc.dpi = self.spin_dpi.value()
@@ -787,8 +799,10 @@ class MainWindow(QMainWindow):
         self.baseline_picker.previous_source = None
         self._reset_results()
         self.channel_infos, self.previews = [], {}
+        self._loaded_once = False
         self.lbl_pre.clear()
         self.lbl_export.clear()
+        self.progress.reset()
         self.current = Path(item.data(Qt.UserRole)) if item is not None else None
         state = self.recording_states.pop(self.current, None)
         if state is not None:
@@ -1038,10 +1052,44 @@ class MainWindow(QMainWindow):
         self.lbl_markers_found.setText(self.t("markers_found", txt=txt))
 
     # ---------------------------------------------------------------- steps
+    def clear_page_results(self, page: str):
+        if self._busy or self.current is None:
+            return
+        if page == "read":
+            self.forms_store()
+            self.A = None
+            self.baseline_picker.bind(None)
+            self.fig_raw.set_figure(None)
+            self._refresh_marker_choices()
+            self._show_markers_found()
+            self._sync_dff_source()
+        if page in ("read", "pre"):
+            self.B = self.C = None
+            self.lbl_pre.clear()
+            self.fig_dedrift.set_figure(None)
+            self.fig_deconv.set_figure(None)
+        if page in ("read", "pre", "peth"):
+            self.peth = None
+            self._fill_trial_table()
+            for view in (self.fig_peth, self.fig_peth_dff, self.fig_auc):
+                view.set_figure(None)
+        if page in ("read", "pre", "events"):
+            self.events = self.stim_events = None
+            self._show_event_summary()
+            for view in (self.fig_events, self.fig_dist, self.fig_rate):
+                view.set_figure(None)
+        if page == "export":
+            self.lbl_export.clear()
+            self.progress.reset()
+        self._update_enabled()
+        self.log(self.t("cleared_page", file=self.current.name, page=self.t(f"tab_{page}").replace("&&", "&")))
+
     def _run(self, fn, done, pass_callbacks=False):
         if self._busy:
             return
         self._set_busy(True)
+        if pass_callbacks:
+            self.progress.setValue(0)
         w = Worker(fn, pass_callbacks)
         w.setAutoDelete(False)
         self._workers.add(w)   # keep the runnable and its signals alive until it reports back
@@ -1053,6 +1101,7 @@ class MainWindow(QMainWindow):
                 self.close()
             else:
                 done(out)
+                self._update_clear_buttons()
 
         def fail(msg):
             self._workers.clear()
@@ -1092,6 +1141,8 @@ class MainWindow(QMainWindow):
         def done(a):
             self._reset_results()
             self.A = a
+            self._loaded_once = True
+            self.lbl_pre.clear()
             self.log(plotting_tr("log_read", self.lang, name=path.name))
             self._refresh_marker_choices()
             self._show_markers_found()
@@ -1140,6 +1191,8 @@ class MainWindow(QMainWindow):
             source = self.t("pre_ratio_source", column=names["exported_dff"])
         else:
             source = self.t("pre_raw_source", column=signal, method=method)
+        if cfg.dedrift.center_window_s > 0:
+            source += "\n    " + self.t("pre_center_source", window=cfg.dedrift.center_window_s)
         if names.get("control_role") == "baseline" and method != "signal_interval":
             control = self.t("pre_device_baseline", column=control)
         message = self.t("pre_confirm_data", file=raw.source, group=names.get("group") or self.t("none"),
@@ -1193,6 +1246,8 @@ class MainWindow(QMainWindow):
         def done(p):
             self.peth = p
             self.log(plotting_tr("log_peth", self.lang, marker=marker, n=len(p.trials)))
+            if p.skipped_incomplete_pre:
+                self.log(plotting_tr("log_nonfinite_pre", self.lang, n=p.skipped_incomplete_pre))
             self._fill_trial_table()
             self.redraw_all()
 
@@ -1264,9 +1319,9 @@ class MainWindow(QMainWindow):
         lang = self.lang
         plotting.setup_style(lang)
         cfg = self.cfg
-        onsets = self.peth.onsets if self.peth is not None else (
-            pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=self.B)[1]
-            if self.A is not None else ())
+        # Full-trace overlays include stimuli even when a peri-event trial is dropped.
+        onsets = (pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=self.B)[1]
+                  if self.A is not None else ())
 
         def put(view, make):
             fig = make() if make else None
@@ -1344,7 +1399,7 @@ class MainWindow(QMainWindow):
             return
         cfg = PipelineConfig.from_dict(self.forms_store().to_dict())
         configured = {path: deepcopy(self._view_config(state.config)) for path, state in self.recording_states.items()
-                      if state.results[0] is not None}
+                      if state.loaded_once}
         if self.current is not None:
             configured[self.current] = cfg
         cfg = replace(cfg, channels=replace(cfg.channels, marker_file=""))  # auto-pair unvisited files
@@ -1380,8 +1435,6 @@ class MainWindow(QMainWindow):
         self.m_lang.setEnabled(not busy)
         self.lang_combo.setEnabled(not busy)
         self.statusBar().showMessage(self.t("busy") if busy else self.t("ready"))
-        if busy:
-            self.progress.setValue(0)
         self._update_enabled()
 
     def _update_enabled(self):
@@ -1393,6 +1446,14 @@ class MainWindow(QMainWindow):
         self.b_remove.setEnabled(has and not self._busy)
         self.b_cancel.setEnabled(self._busy)
         self.baseline_picker.refresh()
+        self._update_clear_buttons()
+
+    def _update_clear_buttons(self):
+        ready = {"read": self.A is not None, "pre": self.B is not None,
+                 "peth": self.peth is not None, "events": self.events is not None,
+                 "export": bool(self.lbl_export.text()) or self.progress.value() >= 0}
+        for page, button in self.clear_buttons.items():
+            button.setEnabled(ready[page] and not self._busy)
 
     def log(self, msg: str):
         self.log_view.appendPlainText(msg)

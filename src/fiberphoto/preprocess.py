@@ -5,6 +5,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from scipy import optimize, signal as sps
 
 from .config import DeconvConfig, DedriftConfig
@@ -129,6 +130,26 @@ def signal_interval_baseline(raw: RawData, start: float, end: float) -> tuple[fl
 
 def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
     result = _dedrift_fluorescence(raw, cfg)
+    window = cfg.center_window_s
+    if not np.isfinite(window) or window < 0:
+        raise ValueError("ΔF/F 滑动窗口须为有限的非负秒数 / The ΔF/F centering window must be finite and nonnegative")
+    if window > 0:
+        if len(result.time) < 3 or window * result.fs < 2 - 1e-9:
+            raise ValueError("ΔF/F 滑动窗口过短：需要至少三个采样点 / The ΔF/F centering window needs at least three samples")
+        clock = pd.to_timedelta(result.time - result.time[0], unit="s")
+        trace = pd.Series(result.dff, index=clock)
+        drift = trace.rolling(pd.Timedelta(seconds=window), center=True, closed="both", min_periods=1).median()
+        result.dff_center_baseline = drift.to_numpy()
+        result.dff = result.dff - result.dff_center_baseline
+        if result.dff_unfiltered is not None:
+            result.dff_unfiltered = result.dff_unfiltered - result.dff_center_baseline
+        result.formula_info["center_window_s"] = window
+    if cfg.output == "zscore" and result.unit == "%":
+        centre, scale = np.median(result.dff), (np.std(result.dff) or 1.0)
+        result.formula_info.update(centre=centre, scale=scale)
+        result.dff = (result.dff - centre) / scale
+        result.dff_unfiltered = (result.dff_unfiltered - centre) / scale
+        result.unit = "z"
     result.behavior = raw.behavior_on(result.time)
     result.signal_start_s = cfg.signal_start_s
     result.signal_end_s = cfg.signal_end_s
@@ -212,13 +233,7 @@ def _dedrift_fluorescence(raw: RawData, cfg: DedriftConfig) -> DffData:
     # OASIS estimates noise from the high-frequency spectrum, which the low-pass
     # would remove; keep an unfiltered copy for deconvolution
     dff_raw = (sig_raw - ref) / safe_ref * 100.0
-    unit = "%"
-    if cfg.output == "zscore":
-        centre, scale = np.median(dff), (np.std(dff) or 1.0)
-        details.update(centre=centre, scale=scale)
-        dff, dff_raw = (dff - centre) / scale, (dff_raw - centre) / scale
-        unit = "z"
-    return DffData(time=t, dff=dff, fs=fs, signal=sig, reference=ref, method=method, unit=unit,
+    return DffData(time=t, dff=dff, fs=fs, signal=sig, reference=ref, method=method, unit="%",
                    dff_unfiltered=dff_raw, formula_info=details)
 
 
@@ -227,12 +242,15 @@ def format_dff_formula(raw: RawData, result: DffData, lang: str = "zh") -> str:
     zh = lang == "zh"
     file = Path(raw.source).name or ("当前记录" if zh else "recording")
     prefix = f"[{file}] " + ("ΔF/F 公式　" if zh else "ΔF/F formula    ")
+    d = result.formula_info
+    window = d.get("center_window_s", 0)
+    centered = (f" · Y(t) = X(t) − median(X(u), |u − t| ≤ {window / 2:.12g} s)" if window else "")
     if result.method.startswith("Plexon "):
         column = result.method.removeprefix("Plexon ")
         label = "设备导出比值" if zh else "device-exported ratio"
-        return f"{prefix}ΔF/F(t) = {column}(t) ({label})"
+        name = "X(t)" if window else "ΔF/F(t)"
+        return f"{prefix}{name} = {column}(t) ({label}){centered}"
 
-    d = result.formula_info
     name = raw.channel_names.get("signal") or "signal"
     source = f"F(t) = {'预处理后' if zh else 'processed'} {name}(t)"
     if not d:  # Earlier HDF5 exports contain the baseline waveform but no fit coefficients.
@@ -258,14 +276,17 @@ def format_dff_formula(raw: RawData, result: DffData, lang: str = "zh") -> str:
         else:
             baseline += "（双指数拟合失败，采用三次多项式）" if zh else " (cubic fallback after biexponential fit failure)"
     divisor = "F0" if result.method == "signal_interval" else "F0(t)"
-    formula = f"ΔF/F (%) = 100 × (F(t) − {divisor}) / "
+    name = "X(t) (%)" if window else "ΔF/F (%)"
+    formula = f"{name} = 100 × (F(t) − {divisor}) / "
     if d.get("floored"):
         formula += "D(t), D(t) = where(|F0(t)| < 1e−12, 1e−12, F0(t))"
     else:
         formula += divisor
+    formula += centered
     if result.unit == "z":
-        formula += (f" · z(t) = (ΔF/F (%) − ({d['centre']:.12g})) / {d['scale']:.12g}"
-                    if "centre" in d else " · z(t) = (ΔF/F (%) − median) / SD")
+        value = "Y(t)" if window else "ΔF/F (%)"
+        formula += (f" · z(t) = ({value} − ({d['centre']:.12g})) / {d['scale']:.12g}"
+                    if "centre" in d else f" · z(t) = ({value} − median) / SD")
     return f"{prefix}{source} · {baseline} · {formula}"
 
 

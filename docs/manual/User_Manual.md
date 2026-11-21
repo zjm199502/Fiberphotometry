@@ -1,6 +1,6 @@
-# FiberPhoto Fiber Photometry Analysis · Manual for New Students
+# FiberLume Fiber Photometry Analysis · Manual for New Students
 
-> Version 0.3 · Written for students with no programming background. Working through the sample data takes about 15 minutes.
+> Version 0.6.3. Working through the sample data takes about 15 minutes. In versions 0.6.0–0.6.2, use Help → Check for updates to download the patch and restart.
 
 ## Contents
 
@@ -17,7 +17,7 @@
 
 ## 1. What the software does
 
-FiberPhoto turns the lab's fiber photometry analysis (calcium imaging, TDMS files) into five tabs that you work through in order. Every step shows its figures and lets you change its parameters.
+FiberLume divides the analysis into five pages. Each page provides controls for changing parameters and reviewing the results.
 
 | Step | What it does | Result |
 |---|---|---|
@@ -27,29 +27,19 @@ FiberPhoto turns the lab's fiber photometry analysis (calcium imaging, TDMS file
 | ④ Events | Following OASIS, treats spikes as calcium events; reports rate, amplitude and interval, and compares before vs after stimuli | event table and distributions |
 | ⑤ Export & batch | Saves all data backups, tables and figures, or processes a whole folder with the same parameters | results folder |
 
-data B and data C are always saved as backups (HDF5 + CSV), so you never need to recompute them.
+Each page has a button for clearing its results. For example, clear the peri-event results to try a different window while retaining the event detection results. Clearing preprocessing also clears the analyses that use its output. Your parameters, source recordings and previously exported files are preserved.
 
 ## 2. Installing and starting
 
 ### Windows
 
-1. Double-click `FiberPhoto-0.3.1-Windows-Setup.exe`.
-2. If “Windows protected your PC” appears, click **More info → Run anyway**. The app is not commercially signed; it is not a virus.
-3. Click **Next** through the installer (no administrator rights needed); tick “Create a desktop shortcut” if you like.
-4. Open **FiberPhoto** from the Start menu or desktop. The Start menu also has shortcuts to the manual. To uninstall: Settings → Apps → FiberPhoto → Uninstall.
+Run `FiberLume-0.6.0-Windows-Setup.exe`, complete the installation and open **FiberLume** from the Start menu.
 
 ### macOS
 
-The installer is `FiberPhoto-0.3.1-macOS-AppleSilicon.dmg`, for Macs with Apple M-series chips (M1/M2/M3/M4;  menu → About This Mac → “Chip”). Intel Macs are not supported.
+On an Apple silicon Mac, open `FiberLume-0.6.0-macOS-AppleSilicon.dmg`, drag **FiberLume** to Applications and launch it.
 
-1. Double-click the dmg and drag **FiberPhoto** onto the **Applications** folder in the window that opens.
-2. The first time, double-click FiberPhoto in Applications. If macOS says it cannot verify the developer, click **Done/Cancel**, open **System Settings → Privacy & Security**, click **Open Anyway** near the bottom and confirm with your password. After that it opens normally.
-3. If macOS says the app “is damaged and can’t be opened”, open Terminal, run the line below, and open the app again:
-   `xattr -cr /Applications/FiberPhoto.app`
-
-> The installer contains everything the app needs; **you do not need to install Python or any libraries**.
->
-> The app takes a few seconds to start. Please do not double-click it repeatedly.
+After installing, open **Help → Check for updates**, download the patch and restart the app. The installer includes Python and the analysis dependencies.
 
 ## 3. The interface
 
@@ -89,7 +79,7 @@ Open **② Preprocess** and click **Run preprocessing** (the defaults are fine).
 
 ![Preprocess](img/en_03_pre.png)
 
-- Top right: the signal with its fitted baseline (orange) above, and the de-drifted ΔF/F (data B) below. Once the drift is removed the trace should be roughly flat.
+- The upper right panel shows the signal, fitted baseline and resulting data B. If quiet periods still drift, try the optional rolling median in the preprocessing settings. Compare quiet periods and sustained responses before and after correction.
 - Bottom right: grey is ΔF/F, green is the OASIS denoised trace, and the small panel shows the inferred spikes (data C). τ in the title is the calcium decay time constant, typically 0.5–2 s for GCaMP6s.
 
 ### Step 4: ③ Peri-event
@@ -173,7 +163,8 @@ Every parameter has a hover tip. These are the ones you are most likely to chang
 | Method | Isosbestic control fit | Fits the 405 nm control and removes drift and motion artefacts. Without a control channel the app falls back to a biexponential fit. |
 | Low-pass filter | 10 Hz | Removes high-frequency noise; affects data B display and the peri-event analysis only. |
 | Downsample to | 20 Hz | Smaller files. Going from 50 to 20 Hz does not affect calcium signals. |
-| Output unit | ΔF/F (%) | Usually unchanged. |
+| Output unit | ΔF/F (%) | Applies to recomputed fluorescence. Direct Plexon R imports keep the device ratio. |
+| ΔF/F rolling median window | 0 s (off) | Subtracts the median ΔF/F in a window centred on each frame. Choose a window longer than the responses of interest and shorter than the drift. Responses occupying over half the window can be attenuated. |
 | Calcium model | AR(1) | AR(1) when the indicator rises quickly; try AR(2) for slower rises. |
 
 Deconvolution uses the **de-drifted ΔF/F (data B, before low-pass)**, not the raw data.
@@ -184,13 +175,13 @@ Deconvolution uses the **de-drifted ΔF/F (data B, before low-pass)**, not the r
 |---|---|---|
 | Stimulus time | TTL start | Use **TTL end** for shock experiments (see 5.3). |
 | Time before / after | 5 s / 10 s | The window cut for each trial (heatmap x-axis). |
-| Baseline start / end | −5 s / 0 s | Window for the z-score and the baseline AUC. |
+| Baseline start / end | −5 s / 0 s | Sets the window for z-scores and baseline AUC. ΔF/F centring uses the full pre-stimulus duration. |
 | Target window start / end | 0 s / 5 s | Window for the target AUC and the peak. |
 | Merge interval | 0 s | Markers closer than this count as one (removes duplicate markers). |
 
 All times are in seconds relative to the stimulus; negative means before.
 
-**z-score**: each trial is standardised by its own baseline mean and SD, so the baseline z ≈ 0. **ΔF/F** uses data B values directly. **AUC** uses the trapezoid rule, in units of value × seconds.
+Each **centred ΔF/F** trial is ΔF/F(t) − m, where m is the mean of all pre-stimulus samples (t < 0) in that trial. The sample at stimulus time zero is excluded. The heatmap, average, ΔF/F peak and AUC all use this centred trace in the original data B units. The value subtracted from each trial is recorded in the `prestimulus_mean_input_dff` column of `peth_metrics.csv`. Z-scores use the configured baseline window’s mean and sample standard deviation. AUC uses trapezoidal integration.
 
 ### Events
 
@@ -212,7 +203,7 @@ Each recording gets its own sub-folder in the output folder:
 |---|---|
 | `<name>.h5` | Full backup of data A / B / C (HDF5), readable in Python/MATLAB |
 | `<name>_dataA.csv` / `_dataB.csv` / `_dataC.csv` | The same as tables, open in Excel |
-| `peth_trials_z.csv` / `peth_trials_dff.csv` | z-score / ΔF/F trace per trial (rows = trials, columns = time) |
+| `peth_trials_z.csv` / `peth_trials_dff.csv` | Z-score and pre-stimulus-centred ΔF/F traces. Rows are relative times, with one column per trial plus mean and SEM. |
 | `peth_metrics.csv` | Per-trial latency, baseline/target means, peak, AUC (for both z and ΔF/F) |
 | `events.csv` | Time, amplitude, spike sum, max spike and interval of each event |
 | `events_vs_stimulus.csv` | Events and rate before/after each stimulus |

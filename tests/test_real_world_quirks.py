@@ -129,3 +129,34 @@ def test_windows_are_user_set_in_seconds():
     np.testing.assert_allclose(m["auc_target_dff"], 10.0, atol=1.0)   # 5 %·2 s
     np.testing.assert_allclose(m["auc_baseline_dff"], 0.0, atol=0.5)
     assert (m["peak_z"] > 20).all()
+
+
+def test_peth_centers_whole_pre_stimulus_segment_separately_from_z_window():
+    from fiberphoto.analysis import peri_event
+    from fiberphoto.config import PethConfig
+    from fiberphoto.data import DffData
+
+    t = np.arange(32, dtype=float)
+    dff = np.zeros(t.size)
+    pulse = np.array([-3., -1., 1., 3., 6., 6., 6.])
+    for onset, offset in [(6, 10.), (16, -4.), (26, 0.)]:
+        dff[onset-4:onset+3] = pulse + offset
+    dff[24] = np.nan
+    original = dff.copy()
+    b = DffData(time=t, dff=dff, fs=1., signal=dff, reference=dff, method="x", unit="%")
+    cfg = PethConfig(pre_s=4, post_s=2, baseline_start_s=-4, baseline_end_s=-2,
+                     response_start_s=0, response_end_s=2)
+    p = peri_event(b, np.array([1., 6., 16., 26.]), cfg)
+    np.testing.assert_equal(p.onsets, [6., 16.])
+    assert p.skipped_incomplete_pre == 1
+    np.testing.assert_equal(p.trials_dff, [pulse, pulse])
+    np.testing.assert_allclose(p.trials_dff[:, p.t_rel < 0].mean(axis=1), 0.)
+    np.testing.assert_equal(p.mean("dff"), pulse)
+    np.testing.assert_equal(p.metrics["prestimulus_mean_input_dff"].to_numpy(), [10., -4.])
+    np.testing.assert_allclose(p.metrics["baseline_mean_z"], 0., atol=1e-12)
+    np.testing.assert_allclose(p.metrics["baseline_mean_dff"], -2.)
+    np.testing.assert_allclose(p.metrics["auc_target_dff"], 12.)
+    np.testing.assert_equal(b.dff, original)
+    cfg.pre_s = 0.1
+    with pytest.raises(ValueError, match="at least one sample"):
+        peri_event(b, np.array([6.]), cfg)

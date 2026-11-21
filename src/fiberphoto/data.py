@@ -83,6 +83,7 @@ class DffData:
     signal_start_s: Optional[float] = None
     signal_end_s: Optional[float] = None
     formula_info: dict = field(default_factory=dict)  # actual fitted parameters used by this run
+    dff_center_baseline: Optional[np.ndarray] = None  # subtracted local median, in the source ratio or percent
 
 
 @dataclass
