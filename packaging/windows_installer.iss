@@ -7,19 +7,20 @@
 
 [Setup]
 AppId={{B8674D61-9936-4959-9024-677E18A012C3}
-AppName=FiberPhoto
+AppName=FiberLume
 AppVersion={#AppVersion}
-AppPublisher=FiberPhoto
+AppPublisher=FiberLume
 DefaultDirName={autopf}\FiberPhoto
-DefaultGroupName=FiberPhoto
+DefaultGroupName=FiberLume
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\installer
-OutputBaseFilename=FiberPhoto-{#AppVersion}-Windows-Setup
+OutputBaseFilename=FiberLume-{#AppVersion}-Windows-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=fiberlume.ico
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\fiberphoto.exe
 
@@ -32,12 +33,18 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "..\dist\fiberphoto\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: files; Name: "{group}\FiberPhoto.lnk"
+Type: files; Name: "{group}\FiberPhoto Manual (Chinese).lnk"
+Type: files; Name: "{group}\FiberPhoto Manual (English).lnk"
+Type: files; Name: "{autodesktop}\FiberPhoto.lnk"
+
 [Icons]
-Name: "{group}\FiberPhoto"; Filename: "{app}\fiberphoto.exe"
-Name: "{group}\FiberPhoto Manual (Chinese)"; Filename: "{app}\_internal\fiberphoto\gui\manual\manual_zh.pdf"
-Name: "{group}\FiberPhoto Manual (English)"; Filename: "{app}\_internal\fiberphoto\gui\manual\manual_en.pdf"
-Name: "{group}\{cm:UninstallProgram,FiberPhoto}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\FiberPhoto"; Filename: "{app}\fiberphoto.exe"; Tasks: desktopicon
+Name: "{group}\FiberLume"; Filename: "{app}\fiberphoto.exe"
+Name: "{group}\FiberLume Manual (Chinese)"; Filename: "{app}\_internal\fiberphoto\gui\manual\manual_zh.pdf"
+Name: "{group}\FiberLume Manual (English)"; Filename: "{app}\_internal\fiberphoto\gui\manual\manual_en.pdf"
+Name: "{group}\{cm:UninstallProgram,FiberLume}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\FiberLume"; Filename: "{app}\fiberphoto.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\fiberphoto.exe"; Description: "{cm:LaunchProgram,FiberPhoto}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\fiberphoto.exe"; Description: "{cm:LaunchProgram,FiberLume}"; Flags: nowait postinstall skipifsilent

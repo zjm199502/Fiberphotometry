@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiberphoto"
-version = "0.4.0"
-description = "Fiber photometry calcium-imaging analysis for TDMS recordings (batch core; GUI to follow)"
+version = "0.4.1"
+description = "FiberLume desktop and batch analysis of fiber photometry recordings"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
@@ -32,4 +32,4 @@ fiberphoto-gui = "fiberphoto.gui.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"fiberphoto.gui" = ["manual/*.pdf"]
+"fiberphoto.gui" = ["manual/*.pdf", "assets/*.png"]

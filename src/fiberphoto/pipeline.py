@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import traceback
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -17,10 +17,10 @@ import numpy as np
 import pandas as pd
 
 from . import analysis, plotting
-from .config import PipelineConfig
+from .config import ChannelConfig, PipelineConfig
 from .data import DeconvData, DffData, RawData, save_stage
 from .i18n import tr
-from .io_tdms import is_event_file, read_tdms
+from .recordings import is_recording, read_recording, recording_family
 from .preprocess import DataWarning, decay_time_constant, dedrift, deconvolve
 
 LogFn = Callable[[str], None]
@@ -74,11 +74,11 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
     out.mkdir(parents=True, exist_ok=True)
     res = SessionResult(name=path.stem, out_dir=out)
     h5 = out / f"{path.stem}.h5"
-    if h5.exists():
-        h5.unlink()
     try:
         log(tr("log_read", lang, name=path.name))
-        a = read_tdms(path, cfg.channels)
+        a = read_recording(path, cfg.channels)
+        if h5.exists():
+            h5.unlink()
         res.A = a
         log(tr("log_channels", lang, signal=a.channel_names.get("signal"),
                control=a.channel_names.get("control") or "-",
@@ -196,23 +196,34 @@ def export_figures(res: SessionResult, cfg: PipelineConfig) -> list[Path]:
 
 
 def find_recordings(folder: str | Path) -> list[Path]:
-    return sorted(p for p in Path(folder).rglob("*.tdms")
-                  if not p.name.endswith("_index") and not is_event_file(p))
+    return sorted(p for p in Path(folder).rglob("*")
+                  if p.suffix.lower() in (".tdms", ".csv", ".doric") and p.is_file() and is_recording(p))
 
 
 def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Path,
               log: LogFn = _noop, progress: ProgressFn = _noop,
-              should_stop: Callable[[], bool] = lambda: False) -> list[SessionResult]:
+              should_stop: Callable[[], bool] = lambda: False, *,
+              mapping_source: Path | None = None) -> list[SessionResult]:
     files: list[Path] = []
     for i in inputs:
         i = Path(i)
         files += find_recordings(i) if i.is_dir() else [i]
+    files = list(dict.fromkeys(p.resolve() for p in files))
+    stems = set()
+    for path in files:
+        if path.stem.casefold() in stems:
+            raise ValueError(f"Duplicate output folder '{path.stem}'. Run these recordings in separate output folders.")
+        stems.add(path.stem.casefold())
     results = []
+    source_family = recording_family(mapping_source) if mapping_source else None
     for k, f in enumerate(files):
         if should_stop():
             break
         sub = lambda x, k=k: progress((k + x) / max(len(files), 1))
-        results.append(run_file(f, cfg, out_root, log, sub))
+        file_cfg = cfg
+        if mapping_source and recording_family(f) != source_family:
+            file_cfg = replace(cfg, channels=ChannelConfig(marker_threshold=cfg.channels.marker_threshold))
+        results.append(run_file(f, file_cfg, out_root, log, sub))
     rows = [r.summary | {"file": r.name, "error": r.error} for r in results]
     if rows:
         Path(out_root).mkdir(parents=True, exist_ok=True)

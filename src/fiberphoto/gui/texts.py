@@ -5,12 +5,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 UI: dict[str, dict[str, str]] = {
-    "app_title": {"zh": "光纤记录钙信号分析", "en": "Fiber Photometry Analysis"},
+    "app_title": {"zh": "光纤荧光分析", "en": "Fiber Photometry Analysis"},
     # menus
     "menu_file": {"zh": "文件", "en": "File"},
     "menu_lang": {"zh": "语言 / Language", "en": "Language / 语言"},
     "menu_help": {"zh": "帮助", "en": "Help"},
-    "act_add_files": {"zh": "添加 TDMS 文件…", "en": "Add TDMS files…"},
+    "act_add_files": {"zh": "添加光纤记录…", "en": "Add recordings…"},
     "act_add_folder": {"zh": "添加文件夹…", "en": "Add folder…"},
     "act_sample": {"zh": "加载示例数据", "en": "Load sample data"},
     "act_load_params": {"zh": "加载参数…", "en": "Load parameters…"},
@@ -135,20 +135,20 @@ UI: dict[str, dict[str, str]] = {
     "params_loaded": {"zh": "已加载参数 {path}", "en": "Parameters loaded from {path}"},
     "params_saved": {"zh": "参数已保存到 {path}", "en": "Parameters saved to {path}"},
     "choose_folder": {"zh": "选择文件夹", "en": "Choose folder"},
-    "tdms_filter": {"zh": "TDMS 文件 (*.tdms)", "en": "TDMS files (*.tdms)"},
+    "tdms_filter": {"zh": "光纤记录 (*.tdms *.csv *.doric)", "en": "Photometry recordings (*.tdms *.csv *.doric)"},
     "json_filter": {"zh": "参数文件 (*.json)", "en": "Parameter files (*.json)"},
     "table_filter": {"zh": "打标文件 (*.tdms *.csv *.xlsx *.xls)", "en": "Marker files (*.tdms *.csv *.xlsx *.xls)"},
-    "about_text": {"zh": "fiberphoto {ver}\n钙成像光纤记录分析软件，面向神经生物学研究生培训。\n反卷积算法: OASIS (Friedrich et al., 2017)。",
-                   "en": "fiberphoto {ver}\nFiber photometry calcium analysis for neuroscience training.\nDeconvolution: OASIS (Friedrich et al., 2017)."},
+    "about_text": {"zh": "FiberLume {ver}\n钙成像光纤记录分析软件，面向神经生物学研究生培训。\n反卷积算法: OASIS (Friedrich et al., 2017)。",
+                   "en": "FiberLume {ver}\nFiber photometry calcium analysis for neuroscience training.\nDeconvolution: OASIS (Friedrich et al., 2017)."},
     "guide_text": {
-        "zh": "1. 点击左侧“示例数据”，或添加自己的 TDMS 文件。\n"
+        "zh": "1. 点击左侧“示例数据”，或添加自己的光纤记录。\n"
               "2. ① 数据读取：确认信号、对照和打标通道，点击“读取数据”。\n"
               "3. ② 预处理：一般保持默认，点击“运行预处理”，检查拟合基线是否贴合信号。\n"
               "4. ③ 刺激锁定分析：查看热图和平均反应曲线。\n"
               "5. ④ 事件检测：调整阈值，直到红色三角标记与肉眼可见的事件一致。\n"
               "6. ⑤ 导出：保存当前文件的结果，或用同一组参数批处理所有文件。\n\n"
               "鼠标停在任何参数上可以看到说明。参数可以通过“文件 → 保存参数”保存，方便全组统一。",
-        "en": "1. Click “Sample data” on the left, or add your own TDMS files.\n"
+        "en": "1. Click “Sample data” on the left, or add your own photometry recordings.\n"
               "2. ① Load data: check the signal, control and marker channels, then click “Load data”.\n"
               "3. ② Preprocess: defaults usually work. Check that the fitted baseline follows the signal.\n"
               "4. ③ Peri-event: inspect the heatmap and the average response.\n"

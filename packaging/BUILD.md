@@ -6,8 +6,8 @@ PyInstaller only builds for the system it runs on, so build the Windows app on W
 ## 方式一：GitHub Actions（推荐）/ GitHub Actions (recommended)
 
 把整个项目推送到 GitHub 仓库后，`.github/workflows/build.yml` 会自动在 Windows 和 macOS 上运行测试并打包。
-在仓库的 **Actions** 页面打开最近一次运行，底部 **Artifacts** 里下载 Windows 安装程序（`FiberPhoto-<版本>-Windows-Setup.exe`，由 Inno Setup 生成）
-和 macOS 安装包（`FiberPhoto-<版本>-macOS-AppleSilicon.dmg`，仅 M 系列芯片）。
+在仓库的 **Actions** 页面打开最近一次运行，底部 **Artifacts** 里下载 Windows 安装程序（`FiberLume-<版本>-Windows-Setup.exe`，由 Inno Setup 生成）
+和 macOS 安装包（`FiberLume-<版本>-macOS-AppleSilicon.dmg`，仅 M 系列芯片）。
 也可以在 Actions 页面点击 **Run workflow** 手动重新打包。
 
 Push the project to a GitHub repository; the workflow tests and builds a Windows Setup.exe (Inno Setup) and macOS
@@ -26,8 +26,8 @@ pyinstaller packaging/fiberphoto.spec --noconfirm
 
 结果 / Output:
 
-- Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。把整个文件夹压缩成 zip 发给同学。
-- macOS: `dist/fiberphoto.app`。右键压缩成 zip 发给同学（同学第一次需右键 → 打开）。
+- Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。使用 Inno Setup 运行 `iscc /DAppVersion=0.4.1 packaging/windows_installer.iss` 生成 Setup.exe。
+- macOS: `dist/fiberphoto.app`。在 Apple silicon Mac 上运行 `bash packaging/make_dmg.sh 0.4.1 AppleSilicon` 生成 DMG。
 
 
 ## 更新用户手册 / Updating the manual

@@ -11,6 +11,17 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 N_POINTS = 400
 
 
+def preview_trace(x: np.ndarray) -> tuple[np.ndarray, bool]:
+    if not len(x) or not np.isfinite(x).any():
+        return np.array([]), True
+    flat = np.nanmax(x) - np.nanmin(x) < 1e-12
+    if len(x) > N_POINTS:
+        width = (len(x) + N_POINTS // 2 - 1) // (N_POINTS // 2)
+        starts = np.arange(0, len(x), width)
+        x = np.column_stack((np.fmin.reduceat(x, starts), np.fmax.reduceat(x, starts))).ravel()
+    return x, bool(flat)
+
+
 def channel_previews(path: str | Path) -> dict[tuple[str, str], tuple[np.ndarray, bool]]:
     """(group, channel) -> (min/max-decimated trace, is_flat)."""
     out = {}
@@ -22,14 +33,7 @@ def channel_previews(path: str | Path) -> dict[tuple[str, str], tuple[np.ndarray
                     out[(g.name, ch.name)] = (np.array([]), True)
                     continue
                 x = np.asarray(ch[:], dtype=float)
-                flat = not np.isfinite(x).any() or np.nanmax(x) - np.nanmin(x) < 1e-12
-                k = max(1, x.size // (N_POINTS // 2))
-                m = (x.size // k) * k
-                if k > 1 and m:
-                    blocks = x[:m].reshape(-1, k)
-                    # keep peaks visible: interleave block minima and maxima
-                    x = np.column_stack([blocks.min(axis=1), blocks.max(axis=1)]).ravel()
-                out[(g.name, ch.name)] = (x, bool(flat))
+                out[(g.name, ch.name)] = preview_trace(x)
     return out
 
 

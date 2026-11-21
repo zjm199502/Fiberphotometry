@@ -87,7 +87,7 @@ def auto_map(infos: list[ChannelInfo], cfg: ChannelConfig) -> ChannelConfig:
                           key=lambda i: -i.median if np.isfinite(i.median) else np.inf)
         if cand:
             cfg.signal = cand[0].name
-    if not cfg.control:
+    if not cfg.control and cfg.auto_control:
         cand = [i for i in chans if i.guess == "control" and i.name != cfg.signal]
         if cand:
             cfg.control = cand[0].name
@@ -140,6 +140,23 @@ def read_marker_csv(path: str | Path) -> tuple[dict[str, np.ndarray], dict[str, 
                 if k == n or k.startswith(n):
                     return c
         return None
+
+    # Plexon event exports can contain a full sampled raster instead of an onset list.
+    if path.suffix.lower() == ".csv" and any(k.startswith("timestamp") for k in cols):
+        clock = pick("timestamp")
+        event_cols = [c for c in df if c != clock and str(c).strip().lower() not in ("frame", "frame#")]
+        if (len(df) and event_cols and ("frame" in cols or "frame#" in cols or "event" not in cols)
+                and not set(cols).intersection({"label", "type", "onset", "offset", "end"})
+                and all(df[c].isin([0, 1]).all() for c in event_cols)):
+            t = df[clock].to_numpy(float)
+            if "(ms)" in clock.lower():
+                t = t / 1000
+            if not np.isfinite(t).all() or np.any(np.diff(t) <= 0):
+                raise ValueError("Invalid event timestamps")
+            onsets, offsets = {}, {}
+            for name in event_cols:
+                onsets[name], offsets[name] = detect_edges(df[name].to_numpy(), t, 0.5)
+            return onsets, offsets
 
     on_c = pick("onset", "time", "start", "开始", "时间")
     off_c = pick("offset", "end", "stop", "结束")

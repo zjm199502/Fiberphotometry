@@ -1,7 +1,7 @@
 """Command-line entry point.
 
     fiberphoto run  <file-or-folder> ... -o results [-c params.json] [--lang en]
-    fiberphoto inspect <file.tdms>
+    fiberphoto inspect <recording>
     fiberphoto sample <folder>
     fiberphoto config <params.json>        # write default parameters to edit
 """
@@ -17,7 +17,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="fiberphoto", description="Fiber photometry batch analysis")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("run", help="process TDMS files or folders")
+    r = sub.add_parser("run", help="process photometry recordings or folders")
     r.add_argument("inputs", nargs="+")
     r.add_argument("-o", "--out", default="results")
     r.add_argument("-c", "--config", help="parameters JSON")
@@ -42,11 +42,11 @@ def main(argv=None) -> int:
         results = run_batch(a.inputs, cfg, a.out, log=print)
         return 1 if any(r.error for r in results) else 0
     if a.cmd == "inspect":
-        from .io_tdms import inspect_tdms
+        from .recordings import inspect_recording
         print(f"{'group':<14}{'channel':<20}{'samples':>10}{'fs (Hz)':>10}  guess")
-        for ch in inspect_tdms(a.file):
+        for ch in inspect_recording(a.file):
             fs = f"{ch.fs:.1f}" if ch.fs else "-"
-            print(f"{ch.group:<14}{ch.name:<20}{ch.length:>10}{fs:>10}  {ch.guess}")
+            print(f"{ch.group:<14} {ch.name:<20} {ch.length:>10}{fs:>10}  {ch.guess}")
         return 0
     if a.cmd == "sample":
         from .sample_data import make_sample_dataset

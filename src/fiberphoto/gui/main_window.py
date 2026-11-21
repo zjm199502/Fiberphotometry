@@ -20,11 +20,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWid
 
 from .. import __version__, analysis, plotting
 from ..config import PipelineConfig
-from ..io_tdms import auto_map, find_event_file, inspect_tdms, is_event_file, read_tdms
+from ..io_tdms import auto_map, find_event_file, inspect_tdms, is_event_file
+from ..recordings import device_traces, read_recording
 from ..pipeline import pick_marker, run_batch, run_file
 from ..preprocess import DataWarning, decay_time_constant, dedrift, deconvolve
 from .texts import DECONV, DEDRIFT, EVENTS, PETH, ui
-from .previews import channel_previews, sparkline
+from .previews import channel_previews, preview_trace, sparkline
 from .widgets import FigureView, OptionalFloat, ParamForm, Worker
 from .texts import ParamSpec, L
 
@@ -49,6 +50,7 @@ def _scroll(w: QWidget) -> QScrollArea:
 class MainWindow(QMainWindow):
     def __init__(self, lang: str | None = None):
         super().__init__()
+        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "fiberlume.png")))
         self.settings = QSettings("fiberphoto", "fiberphoto")
         self.lang = lang or self.settings.value("lang", "zh")
         self.cfg = PipelineConfig()
@@ -433,7 +435,7 @@ class MainWindow(QMainWindow):
 
     def retranslate(self):
         t = self.t
-        self.setWindowTitle(f"{t('app_title')} · fiberphoto {__version__}")
+        self.setWindowTitle(f"FiberLume {__version__} · {t('app_title')}")
         self._sync_lang_controls()
         self.m_file.setTitle(t("menu_file"))
         self.m_lang.setTitle(t("menu_lang"))
@@ -529,6 +531,7 @@ class MainWindow(QMainWindow):
         ch.group = self.cb_group.currentText()
         ch.signal = self.cb_signal.currentText()
         ch.control = self.cb_control.currentData() or ""
+        ch.auto_control = False
         ch.markers = [self.lst_markers.item(i).text() for i in range(self.lst_markers.count())
                       if self.lst_markers.item(i).checkState() == Qt.Checked]
         if not ch.markers:
@@ -574,7 +577,7 @@ class MainWindow(QMainWindow):
     def add_paths(self, paths):
         existing = {self.file_list.item(i).data(Qt.UserRole) for i in range(self.file_list.count())}
         for p in paths:
-            if is_event_file(p):
+            if Path(p).suffix.lower() == ".tdms" and is_event_file(p):
                 continue  # marker recordings are paired with their main file automatically
             p = str(Path(p).resolve())
             if p in existing:
@@ -641,8 +644,13 @@ class MainWindow(QMainWindow):
             return
         self.current = Path(item.data(Qt.UserRole))
         try:
-            self.channel_infos = inspect_tdms(self.current)
-            self.previews = channel_previews(self.current)
+            if self.current.suffix.lower() == ".tdms":
+                self.channel_infos = inspect_tdms(self.current)
+                self.previews = channel_previews(self.current)
+            else:
+                traces = device_traces(self.current)
+                self.channel_infos = [t.info() for t in traces]
+                self.previews = {(t.group, t.name): preview_trace(t.values) for t in traces}
         except Exception as e:
             self.channel_infos = []
             self.previews = {}
@@ -687,7 +695,8 @@ class MainWindow(QMainWindow):
     def _apply_channel_cfg(self):
         """Fill the mapping combos from saved settings, falling back to the guesses."""
         saved = self.cfg.channels
-        base = type(saved)(**{**vars(saved), "group": "", "signal": "", "control": "", "time": "", "markers": []})
+        base = type(saved)(**{**vars(saved), "group": "", "signal": "", "control": "", "time": "", "markers": [],
+                             "auto_control": True})
         guess = auto_map(self.channel_infos, base)
         groups = sorted({c.group for c in self.channel_infos}, key=[c.group for c in self.channel_infos].index)
         self.cb_group.blockSignals(True)
@@ -701,21 +710,29 @@ class MainWindow(QMainWindow):
     def _fill_channel_combos(self, *_a, prefer=None, guess=None):
         g = self.cb_group.currentText()
         names = [c.name for c in self.channel_infos if c.group == g]
-        all_names = [c.name for c in self.channel_infos]
+        vendor = self.current and self.current.suffix.lower() != ".tdms"
+        all_names = [c.name for c in self.channel_infos if not vendor or (c.group == g and c.guess == "marker")]
+        if vendor:
+            names = [c.name for c in self.channel_infos if c.group == g and c.guess != "marker"]
         if guess is None:
             guess = auto_map(self.channel_infos, type(self.cfg.channels)(group=g))
         pick = lambda saved, fallback, pool: saved if saved and saved in pool else fallback
-        flat = {c.name for c in self.channel_infos if self._is_flat(c)}
+        flat = {c.name for c in self.channel_infos if (not vendor or c.group == g) and self._is_flat(c)}
         live = [n for n in names if n not in flat]
         sig_guess = guess.signal if guess.signal not in flat else (live[0] if live else guess.signal)
         sig = pick(prefer.signal if prefer else "", sig_guess, names)
         ctl = pick(prefer.control if prefer else "", guess.control if guess.control not in flat else "", names)
+        if prefer and prefer.group == g and not prefer.auto_control and not prefer.control:
+            ctl = ""
         markers = [m for m in (prefer.markers if prefer else []) if m in all_names] or \
             [m for m in guess.markers if m not in flat]
 
         self.cb_signal.clear()
         self.cb_signal.addItems(names)
         self.cb_signal.setCurrentText(sig)
+        if (self.current and self.current.suffix.lower() == ".doric" and len(names) > 1
+                and not (prefer and prefer.group == g and prefer.signal in names)):
+            self.cb_signal.setCurrentIndex(-1)
         self.cb_control.clear()
         self.cb_control.addItem(self.t("none"), "")
         for n in names:
@@ -731,7 +748,7 @@ class MainWindow(QMainWindow):
             self.lst_markers.addItem(it)
 
     def _show_auto_pair(self):
-        pair = find_event_file(self.current) if self.current else None
+        pair = find_event_file(self.current) if self.current and self.current.suffix.lower() == ".tdms" else None
         self.marker_file.setPlaceholderText(
             self.t("auto_paired", name=pair.name) if pair else (self.t("no_pair") if self.current else ""))
 
@@ -807,7 +824,7 @@ class MainWindow(QMainWindow):
             self._show_markers_found()
             self.redraw_all()
 
-        self._run(lambda: read_tdms(path, cfg.channels), done)
+        self._run(lambda: read_recording(path, cfg.channels), done)
 
     def step_pre(self):
         if not self._need("file", "A"):
@@ -1007,7 +1024,9 @@ class MainWindow(QMainWindow):
             self.lbl_export.setText(msg)
             self.log(msg)
 
-        self._run(lambda log, progress: run_batch(paths, cfg, out, log, progress, lambda: self._stop),
+        source = self.current
+        self._run(lambda log, progress: run_batch(paths, cfg, out, log, progress, lambda: self._stop,
+                                                  mapping_source=source),
                   done, pass_callbacks=True)
 
     def cancel(self):

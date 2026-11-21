@@ -22,6 +22,7 @@ class ChannelConfig:
     sampling_rate: Optional[float] = None  # Hz; None = read from file
     marker_threshold: Optional[float] = None  # TTL threshold; None = midpoint of range
     marker_file: str = ""           # optional CSV/Excel or marker TDMS; "" = auto-pair <name>-Event.tdms
+    auto_control: bool = True       # infer a reference only until an explicit GUI choice
 
 
 @dataclass

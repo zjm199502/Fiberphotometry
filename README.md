@@ -1,11 +1,26 @@
-# fiberphoto · 光纤记录钙成像分析
+# FiberLume · 光纤荧光分析
 
-Fiber photometry (calcium imaging) analysis for TDMS recordings: a batch-processing
+<img src="src/fiberphoto/gui/assets/fiberlume.png" alt="FiberLume" width="96" height="96">
+
+### 0.4.1 支持的记录格式
+
+| 设备或格式 | 导入方法 |
+|---|---|
+| NI TDMS | 选择主记录，外置事件 TDMS 可自动配对。 |
+| Plexon Multi-Wavelength / Dual-Wavelength | 在采集软件中导出合并波长的 **PhotoData CSV**，在通道组中选择光纤 F1、F2 等。读取 RawF 原始荧光；Stim 列记录光源状态。独立行为 TTL 表可在打标文件栏选择。单波长导出只含该波长；双波长校正请使用合并表。 |
+| Neurophotometrics | 选择带 Timestamp、LedState 或 Flags 和 Region/Channel 编号列的 CSV；按 ROI 和激发波长拆帧。参考轨迹按时间插值，只保留两路共同覆盖的信号帧。 |
+| Doric Neuroscience Studio | 打开 .doric 文件，在对应 Series 中选择 AnalogIn 或 Lock-In 解调通道。信号和参考的对应关系按实验接线指定。 |
+
+CSV 默认使用秒，显式标注 `Timestamp (ms)` 或 `Timestamp (us)` 时自动换算。文件夹扫描按表头识别记录；每次分析一个选定的光纤或 Series；同一文件导出多个通道组时，分别选择输出目录，以保留每一组结果。Plexon 此入口用于光纤软件导出的荧光表，PLX/PL2 属于另一种采集格式。
+
+[厂商导出说明（Plexon）](https://plexon.com/wp-content/uploads/2022/05/Multiwavelength-Photometry-Release-Notes.pdf) · [Doric 官方示例](https://github.com/doriclenses/readDoric) · [Neurophotometrics 采集手册](https://neurophotometrics.com/s/Full-Length-Manual-2021.pdf)
+
+Fiber photometry (calcium imaging) analysis for photometry recordings: a batch-processing
 core plus a bilingual (Chinese/English) desktop app for users without programming experience.
 
-钙成像光纤记录（TDMS 格式）分析软件：批处理核心 + 中英双语桌面界面，面向没有编程基础的使用者。
+钙成像光纤记录分析软件：批处理核心 + 中英双语桌面界面，面向没有编程基础的使用者。
 
-## 安装 / Installation
+## 已发布的 0.4.0 安装版 / Previous release
 
 [Windows x64 安装程序](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.4.0/FiberPhoto-0.4.0-Windows-Setup.exe) · [macOS Apple silicon 安装镜像](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.4.0/FiberPhoto-0.4.0-macOS-AppleSilicon.dmg)
 
@@ -43,7 +58,7 @@ PyInstaller 只能在目标系统上打包（Windows 版要在 Windows 上打包
 
 | 阶段 Stage | 模块 Module | 输入 → 输出 |
 |---|---|---|
-| 数据读取 Read | `io_tdms.py` | TDMS → **data A**（信号、对照通道、行为打标） |
+| 数据读取 Read | `recordings.py`、`io_tdms.py` | 原始光纤记录 → **data A**（信号、对照通道、行为打标） |
 | 去漂移 De-drift | `preprocess.dedrift` | data A → **data B**（ΔF/F，备份） |
 | 反卷积 Deconvolve | `preprocess.deconvolve` (OASIS) | data B → **data C**（去噪信号 + 推断活动，备份） |
 | 刺激锁定 Peri-event | `analysis.peri_event` | data B + 打标 → 逐试次矩阵、AUC、峰值、潜伏期 |

@@ -13,7 +13,7 @@ root = Path(SPECPATH).parent
 a = Analysis(
     [str(root / "packaging" / "launch.py")],
     pathex=[str(root / "src")],
-    datas=[(str(root / "src" / "fiberphoto" / "gui" / "manual"), "fiberphoto/gui/manual")],
+    datas=[(str(root / "src" / "fiberphoto" / "gui" / sub), f"fiberphoto/gui/{sub}") for sub in ("manual", "assets")],
     hiddenimports=collect_submodules("oasis") + collect_submodules("nptdms") + ["openpyxl"],
     excludes=["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtPdf", "tkinter", "IPython"],
@@ -26,8 +26,9 @@ if sys.platform == "win32":
 
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="fiberphoto",
-          console=False, icon=None)
+          console=False, icon=str(root / "packaging" / "fiberlume.ico") if sys.platform == "win32" else None)
 coll = COLLECT(exe, a.binaries, a.datas, name="fiberphoto")
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="fiberphoto.app", bundle_identifier="org.fiberphoto.app",
-                 info_plist={"NSHighResolutionCapable": True})
+                 icon=str(root / "packaging" / "fiberlume.icns"),
+                 info_plist={"NSHighResolutionCapable": True, "CFBundleDisplayName": "FiberLume"})

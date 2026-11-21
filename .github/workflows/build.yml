@@ -59,7 +59,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $dir = Join-Path $env:RUNNER_TEMP 'FiberPhoto Install'
+          $dir = Join-Path $env:RUNNER_TEMP 'FiberLume Install'
           $qa = Join-Path $env:RUNNER_TEMP 'fiberphoto-qa'
           $setup = (Get-Item installer/*-Setup.exe).FullName
           function Invoke-Checked($file, $arguments) {
@@ -85,13 +85,13 @@ jobs:
           mount="$RUNNER_TEMP/fiberphoto-mount"
           hdiutil attach installer/*.dmg -readonly -nobrowse -mountpoint "$mount"
           trap 'hdiutil detach "$mount"' EXIT
-          "$mount/FiberPhoto.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/fiberphoto-qa" || {
+          "$mount/FiberLume.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/fiberphoto-qa" || {
             cat "$RUNNER_TEMP/fiberphoto-qa/verify-error.txt"
             exit 1
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: FiberPhoto-${{ env.VER }}-${{ runner.os }}-${{ matrix.arch }}
+          name: FiberLume-${{ env.VER }}-${{ runner.os }}-${{ matrix.arch }}
           path: installer/*
           if-no-files-found: error
 
@@ -112,7 +112,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          win="installers/FiberPhoto-$version-Windows-Setup.exe"
-          mac="installers/FiberPhoto-$version-macOS-AppleSilicon.dmg"
+          win="installers/FiberLume-$version-Windows-Setup.exe"
+          mac="installers/FiberLume-$version-macOS-AppleSilicon.dmg"
           test -s "$win" && test -s "$mac"
-          gh release create "$GITHUB_REF_NAME" "$win" "$mac" --verify-tag --title "FiberPhoto $version" --notes-file "packaging/releases/$version.md"
+          gh release create "$GITHUB_REF_NAME" "$win" "$mac" --verify-tag --title "FiberLume $version" --notes-file "packaging/releases/$version.md"

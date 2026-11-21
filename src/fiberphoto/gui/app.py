@@ -26,6 +26,7 @@ def main(argv=None) -> int:
     argv = sys.argv if argv is None else argv
     app = QApplication(argv)
     app.setApplicationName("fiberphoto")
+    app.setApplicationDisplayName("FiberLume")
     app.setOrganizationName("fiberphoto")
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
