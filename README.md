@@ -26,11 +26,11 @@ core plus a bilingual (Chinese/English) desktop app for users without programmin
 
 钙成像光纤记录分析软件：批处理核心 + 中英双语桌面界面，面向没有编程基础的使用者。
 
-## 已发布的 0.4.0 安装版 / Previous release
+## 0.5.0 安装版 / Installation
 
-[Windows x64 安装程序](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.4.0/FiberPhoto-0.4.0-Windows-Setup.exe) · [macOS Apple silicon 安装镜像](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.4.0/FiberPhoto-0.4.0-macOS-AppleSilicon.dmg)
+[Windows x64 安装程序](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.5.0/FiberLume-0.5.0-Windows-Setup.exe) · [macOS Apple silicon 安装镜像](https://github.com/zjm199502/Fiberphotometry/releases/download/v0.5.0/FiberLume-0.5.0-macOS-AppleSilicon.dmg)
 
-Windows 双击 Setup，完成后从开始菜单打开 FiberPhoto。macOS 打开 DMG，将 FiberPhoto 拖入 Applications。两个安装包都包含 Python 和分析依赖。
+Windows 双击 Setup，完成后从开始菜单打开 FiberLume。使用 0.4.0 的用户可直接覆盖安装。macOS 打开 DMG，将 FiberLume 拖入 Applications。两个安装包都包含 Python 和分析依赖。
 
 ## 从源码启动 / Run from source
 

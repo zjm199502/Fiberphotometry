@@ -69,6 +69,12 @@ jobs:
               throw "$file exited with $($p.ExitCode)"
             }
           }
+          if ($env:GITHUB_REF -eq 'refs/tags/v0.5.0') {
+            $previous = Join-Path $env:RUNNER_TEMP 'FiberPhoto-0.4.0-Windows-Setup.exe'
+            Invoke-WebRequest "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v0.4.0/FiberPhoto-0.4.0-Windows-Setup.exe" -OutFile $previous
+            if ((Get-FileHash $previous).Hash -ne 'f9257810cea56b2c30656b9e5b27233c98c6fce0752ab0e9bb0e4a28866b400e') { throw 'Unexpected 0.4.0 installer digest' }
+            Invoke-Checked $previous "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`""
+          }
           1..2 | ForEach-Object {
             Invoke-Checked $setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`""
             Invoke-Checked "$dir/fiberphoto.exe" "--verify-install `"$qa`""

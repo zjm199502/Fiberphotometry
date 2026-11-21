@@ -26,8 +26,8 @@ pyinstaller packaging/fiberphoto.spec --noconfirm
 
 结果 / Output:
 
-- Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。使用 Inno Setup 运行 `iscc /DAppVersion=0.4.1 packaging/windows_installer.iss` 生成 Setup.exe。
-- macOS: `dist/fiberphoto.app`。在 Apple silicon Mac 上运行 `bash packaging/make_dmg.sh 0.4.1 AppleSilicon` 生成 DMG。
+- Windows: `dist/fiberphoto/` 文件夹，双击 `fiberphoto.exe`。使用 Inno Setup 运行 `iscc /DAppVersion=0.5.0 packaging/windows_installer.iss` 生成 Setup.exe。
+- macOS: `dist/fiberphoto.app`。在 Apple silicon Mac 上运行 `bash packaging/make_dmg.sh 0.5.0 AppleSilicon` 生成 DMG。
 
 
 ## 更新用户手册 / Updating the manual
