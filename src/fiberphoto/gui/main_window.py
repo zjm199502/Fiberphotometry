@@ -52,7 +52,8 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("fiberphoto", "fiberphoto")
         self.lang = lang or self.settings.value("lang", "zh")
         self.cfg = PipelineConfig()
-        self.pool = QThreadPool.globalInstance()
+        self.pool = QThreadPool(self)
+        self._closing = False
         self._stop = False
         self._busy = False
         self._workers = set()
@@ -582,6 +583,7 @@ class MainWindow(QMainWindow):
             it.setData(Qt.UserRole, p)
             it.setToolTip(p)
             self.file_list.addItem(it)
+            existing.add(p)
         if self.file_list.currentRow() < 0 and self.file_list.count():
             self.file_list.setCurrentRow(0)
         if not self.out_dir.text() and self.file_list.count():
@@ -627,6 +629,11 @@ class MainWindow(QMainWindow):
 
     def on_file_selected(self, item, _prev):
         self._reset_results()
+        self.previews.clear()
+        self.lbl_pre.clear()
+        self.lbl_export.clear()
+        self._refresh_marker_choices()
+        self._show_markers_found()
         self.redraw_all()
         if item is None:
             self.current = None
@@ -752,12 +759,18 @@ class MainWindow(QMainWindow):
         def finish(out):
             self._workers.discard(w)
             self._set_busy(False)
-            done(out)
+            if self._closing:
+                self.close()
+            else:
+                done(out)
 
         def fail(msg):
             self._workers.discard(w)
             self._set_busy(False)
-            self.error(msg)
+            if self._closing:
+                self.close()
+            else:
+                self.error(msg)
 
         w.signals.finished.connect(finish, Qt.QueuedConnection)
         w.signals.failed.connect(fail, Qt.QueuedConnection)
@@ -1008,6 +1021,10 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- misc
     def _set_busy(self, busy: bool):
         self._busy = busy
+        self.files_box.setEnabled(not busy)
+        self.m_file.setEnabled(not busy)
+        self.m_lang.setEnabled(not busy)
+        self.lang_combo.setEnabled(not busy)
         self.statusBar().showMessage(self.t("busy") if busy else self.t("ready"))
         if busy:
             self.progress.setValue(0)
@@ -1045,6 +1062,17 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, self.t("act_about"), self.t("about_text", ver=__version__))
 
     def closeEvent(self, e):
+        if self._busy:
+            self._closing = True
+            self.cancel()
+            e.ignore()
+            return
+        self.pool.waitForDone()
+        self._reset_results()
+        self.previews.clear()
+        self.channel_infos.clear()
+        for view in self.findChildren(FigureView):
+            view.set_figure(None)
         self.settings.setValue("out_dir", self.out_dir.text())
         super().closeEvent(e)
 

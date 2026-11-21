@@ -50,6 +50,35 @@ def test_full_walkthrough(qtbot, window):
     assert not w.shown
 
 
+def test_close_during_analysis(qtbot, window):
+    from threading import Event
+
+    release = Event()
+    applied = []
+    window.show()
+    window._run(lambda: release.wait(10), applied.append)
+    try:
+        assert not window.file_list.isEnabled()
+        assert not window.close()
+        assert window._stop and window.isVisible()
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not window.isVisible())
+    assert not applied and not window._workers
+
+
+def test_switch_recordings(qtbot, window):
+    for row in (0, 1, 0):
+        window.file_list.setCurrentRow(row)
+        assert window.A is None
+        assert window.cb_marker_use.count() == 0
+        run(qtbot, window, window.step_read)
+        assert window.A is not None
+    path = window.current
+    window.remove_file()
+    path.rename(path.with_suffix(".moved"))
+
+
 def test_parameters_reach_pipeline(qtbot, window):
     w = window
     w.form_dedrift.editors["method"].setCurrentIndex(w.form_dedrift.editors["method"].findData("polynomial"))

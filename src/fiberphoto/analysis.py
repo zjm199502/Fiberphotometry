@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy import signal as sps
+from scipy.integrate import trapezoid
 
 from .config import EventConfig, PethConfig
 from .data import DeconvData, DffData
@@ -60,8 +61,8 @@ def _window_metrics(seg: np.ndarray, t_rel: np.ndarray, base_m, targ_m, dt: floa
         f"baseline_mean_{tag}": float(base.mean()) if base.size else np.nan,
         f"target_mean_{tag}": float(targ.mean()) if targ.size else np.nan,
         f"peak_{tag}": float(targ[k]) if targ.size else np.nan,
-        f"auc_baseline_{tag}": float(np.trapezoid(base, dx=dt)) if base.size > 1 else np.nan,
-        f"auc_target_{tag}": float(np.trapezoid(targ, dx=dt)) if targ.size > 1 else np.nan,
+        f"auc_baseline_{tag}": float(trapezoid(base, dx=dt)) if base.size > 1 else np.nan,
+        f"auc_target_{tag}": float(trapezoid(targ, dx=dt)) if targ.size > 1 else np.nan,
     }
 
 

@@ -53,7 +53,60 @@ jobs:
       - name: Installer (macOS)
         if: runner.os == 'macOS'
         run: bash packaging/make_dmg.sh "$VER" "${{ matrix.arch }}"
+      - name: Verify Windows installation, reinstall and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'FiberPhoto Install'
+          $qa = Join-Path $env:RUNNER_TEMP 'fiberphoto-qa'
+          $setup = (Get-Item installer/*-Setup.exe).FullName
+          function Invoke-Checked($file, $arguments) {
+            $p = Start-Process -FilePath $file -ArgumentList $arguments -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "$file exited with $($p.ExitCode)" }
+          }
+          1..2 | ForEach-Object {
+            Invoke-Checked $setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`""
+            Invoke-Checked "$dir/fiberphoto.exe" "--verify-install `"$qa`""
+          }
+          Invoke-Checked "$dir/unins000.exe" '/VERYSILENT /NORESTART'
+          if ((Test-Path "$dir/fiberphoto.exe") -or !(Test-Path "$qa/data/mouse01_session1.tdms")) {
+            throw 'Unexpected state after uninstall'
+          }
+      - name: Verify macOS disk image
+        if: runner.os == 'macOS'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mount="$RUNNER_TEMP/fiberphoto-mount"
+          hdiutil attach installer/*.dmg -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          "$mount/FiberPhoto.app/Contents/MacOS/fiberphoto" --verify-install "$RUNNER_TEMP/fiberphoto-qa"
       - uses: actions/upload-artifact@v4
         with:
           name: FiberPhoto-${{ env.VER }}-${{ runner.os }}-${{ matrix.arch }}
           path: installer/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Publish verified installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          win="installers/FiberPhoto-$version-Windows-Setup.exe"
+          mac="installers/FiberPhoto-$version-macOS-AppleSilicon.dmg"
+          test -s "$win" && test -s "$mac"
+          gh release create "$GITHUB_REF_NAME" "$win" "$mac" --verify-tag --title "FiberPhoto $version" --notes-file "packaging/releases/$version.md"
