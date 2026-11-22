@@ -1,4 +1,4 @@
-"""Preset analyses for ABET cue and tray-entry trials on the mapped acquisition clock."""
+"""Cue and tray-entry analysis using calcium resampled onto the ABET clock."""
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -8,8 +8,9 @@ import pandas as pd
 from matplotlib.figure import Figure
 
 from .analysis import peri_event
+from .abet_resampling import DURATION_RESAMPLE
 from .config import PethConfig
-from .plotting import setup_style
+from .plotting import _outside_legend, setup_style
 
 
 LABELS = {
@@ -51,9 +52,8 @@ def _events(result):
 def analyze_abet(b, aligned, *, peak_direction="positive"):
     """Compute single-trial descriptive metrics, retaining excluded trials in the ledger."""
     mode = aligned.info["mode"]
-    if mode not in ("offset", "affine", "assumed_trigger"):
-        raise ValueError("请先指定 ABET 时钟映射 / Select an ABET clock mapping first")
-    scale, offset = aligned.info["scale"], aligned.info["offset_s"]
+    if mode != DURATION_RESAMPLE:
+        raise ValueError("请重新读取并重采样钙记录 / Reload and resample the recording on the ABET clock")
     if not np.isfinite(b.fs) or round(3 * b.fs) < 1:
         raise ValueError("ABET 的 3 秒基线内至少需要一帧 / The 3-second baseline must contain a sample")
     settings = {lock: PethConfig(pre_s=3, post_s=post, baseline_start_s=-3,
@@ -63,7 +63,7 @@ def analyze_abet(b, aligned, *, peak_direction="positive"):
     metrics, traces = [], []
     t = np.asarray(b.time)
     for event_id, (trial, group, native, lamp) in enumerate(_events(aligned), 1):
-        onset = offset + scale * native
+        onset = native
         lock = "cue" if group.startswith("cue_") else "tray"
         cfg = settings[lock]
         reason = ""
@@ -82,7 +82,7 @@ def analyze_abet(b, aligned, *, peak_direction="positive"):
         elif not np.isfinite(b.dff[left:right + 1]).all():
             reason = "nonfinite_signal"
         record = dict(event_id=event_id, trial=trial, group=group, abet_onset_s=native,
-                      calcium_onset_s=onset, light_relative_s=(lamp-native)*scale,
+                      calcium_onset_s=onset, light_relative_s=lamp-native,
                       sync_mode=mode, included=not reason, exclusion=reason)
         if not reason:
             p = peri_event(b, np.array([onset]), cfg, marker=group)
@@ -103,11 +103,11 @@ def analyze_abet(b, aligned, *, peak_direction="positive"):
         use = rows[rows.included.astype(bool)]
         groups.append(dict(group=group, n_candidates=len(rows), n_used=len(use),
                            mean_target_dff=use.target_mean_dff.mean(), mean_signed_auc=use.auc_target_dff.mean()))
-    params = dict(sync_mode=mode, offset_s=offset, scale=scale, dff_unit=b.unit,
+    params = dict(sync_mode=mode, dff_unit=b.unit,
                   alignment=aligned.info, dff_method=b.method, sampling_rate_hz=b.fs,
                   peak_direction=peak_direction, baseline_s=[-3., 0.], response_s=[0., 3.],
                   display_s={"cue": [-3., 6.], "tray": [-3., 3.]},
-                  centering="B(t) - mean(B[-3, 0)) per event; zero is the first sample at or after mapped onset",
+                  centering="B(t) - mean(B[-3, 0)) per event; zero is the first resampled frame at or after the ABET event",
                   auc="Signed trapezoidal integral of centered B over [0, 3] seconds",
                   aggregation="Session-level descriptive means across complete events; special cues reported separately",
                   source="ABET session event log, user-defined cue/tray protocol; FiberLume analysis.peri_event")
@@ -142,7 +142,6 @@ def figure_abet_analysis(result, language="zh"):
                 if inside.any():
                     heat.scatter(lamp[inside], np.flatnonzero(inside), c="#e69a19", edgecolors="black",
                                  s=24, marker="D", label="Tray light on" if en else "食槽灯亮")
-                    heat.legend(fontsize=8)
         else:
             heat.text(.5, .5, "No complete trials" if en else "无完整试次", ha="center", transform=heat.transAxes)
         heat.set_title(title[int(en)])
@@ -156,19 +155,14 @@ def figure_abet_analysis(result, language="zh"):
             values = g.groupby("t_rel_s").dff_centered.mean()
             ax.plot(values.index, values, color=COLORS[group],
                     label=f"{LABELS[group][int(en)]} (n={g.event_id.nunique()})")
-        if ax.lines:
-            ax.legend(fontsize=8)
         ax.set_ylabel(f"ΔF/F ({result.parameters['dff_unit']})")
         ax.set_title((("Cue onset", "Tray entry") if en else ("声音开始", "进槽"))[int(name == "tray")])
         ax.axhline(0, color="0.65", lw=.7)
     for ax in axes.values():
         ax.axvline(0, color="#555555", ls=":", lw=1)
         ax.set_xlabel("Event time (s)" if en else "相对事件时间 (s)")
-    mode = result.parameters["sync_mode"]
-    status = {"assumed_trigger": ("假定自动触发 · 启动偏差未经测量", "Assumed trigger · unmeasured startup error"),
-              "offset": ("单锚点对齐 · 漂移未经测量", "Single anchor · unmeasured drift"),
-              "affine": ("双锚点对齐", "Two-anchor alignment")}[mode][int(en)]
-    fig.suptitle(status)
+    fig.suptitle("Calcium resampled to the ABET timeline" if en else "按 ABET 实验时长重采样的钙信号")
+    _outside_legend(fig, axes.values(), 2)
     return fig
 
 

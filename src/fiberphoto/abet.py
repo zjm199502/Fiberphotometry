@@ -4,11 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from .abet_resampling import (DURATION_RESAMPLE, behavior_to_source, grid_info,
+                              resample_calcium, source_to_behavior)
 
 
 CUE_ALL = "ABET: cue all"
@@ -24,9 +27,7 @@ SCHEDULER_TOLERANCE_S = 0.05
 @dataclass
 class AbetConfig:
     path: str = ""
-    mode: str = "behavior_only"
-    anchors: list = field(default_factory=list)  # ordered pairs of native ABET and calcium seconds
-    latency_s: float = 0.0
+    mode: str = DURATION_RESAMPLE
     control_gap_s: float = 3.0
 
 
@@ -176,37 +177,6 @@ def read_abet(path: str | Path) -> AbetSession:
     )
 
 
-def _clock(session, cfg, first, last):
-    """Validate only observed anchors; never treat the final sample as the stop pulse."""
-    if cfg.mode not in {"behavior_only", "assumed_trigger", "offset", "affine"}:
-        raise ValueError(f"Unknown ABET clock mode: {cfg.mode}")
-    expected = {"behavior_only": 0, "assumed_trigger": 0, "offset": 1, "affine": 2}[cfg.mode]
-    points = np.asarray(cfg.anchors, dtype=float)
-    if points.shape != ((expected, 2) if expected else (0,)) or not np.isfinite(points).all():
-        raise ValueError(f"{cfg.mode} requires {expected} measured (ABET, calcium) anchor pairs.")
-    if not np.isfinite(cfg.latency_s) or cfg.latency_s < 0:
-        raise ValueError("Assumed acquisition latency must be finite and nonnegative.")
-    if cfg.mode == "behavior_only":
-        return None, None
-    if cfg.mode == "assumed_trigger":
-        if not session.sync_pulses:
-            raise ValueError("No ABET start #1 pulse for trigger-based alignment.")
-        return first - cfg.latency_s - session.sync_pulses[0], 1.0
-    native, calcium = points.T
-    if (np.any(native < 0) or np.any(native > session.duration_s)
-            or np.any(calcium < first) or np.any(calcium > last)):
-        raise ValueError("Measured ABET/calcium anchors must lie in their respective recordings.")
-    scale = 1.0
-    if cfg.mode == "affine":
-        if native[1] <= native[0] or calcium[1] <= calcium[0]:
-            raise ValueError("Both sets of anchors must be strictly increasing.")
-        scale = (calcium[1] - calcium[0]) / (native[1] - native[0])
-    offset = calcium[0] - scale * native[0]
-    if not np.isfinite(offset) or not np.isfinite(scale) or scale <= 0:
-        raise ValueError("Measured anchors yield an invalid clock mapping.")
-    return float(offset), float(scale)
-
-
 def _controls(session, gap):
     """Keep isolated tray rises outside cue/response epochs and away from feeder pulses."""
     times = session.tray_onsets_s
@@ -236,13 +206,12 @@ _TIMESTAMP_COLUMNS = (
 
 
 def align_abet(session: AbetSession, cfg: AbetConfig, calcium_time) -> AbetResult:
-    time = np.asarray(calcium_time, dtype=float)
-    if time.ndim != 1 or len(time) < 2 or not np.isfinite(time).all() or np.any(np.diff(time) <= 0):
-        raise ValueError("Calcium timestamps must be finite and strictly increasing.")
+    if cfg.mode != DURATION_RESAMPLE:
+        raise ValueError("ABET 联合分析只支持按行为时长重采样 / Expected ABET duration resampling")
     if not np.isfinite(cfg.control_gap_s) or cfg.control_gap_s < 0:
         raise ValueError("Uncued tray control spacing must be finite and nonnegative.")
-    first, last = float(time[0]), float(time[-1])
-    offset, scale = _clock(session, cfg, first, last)
+    grid = grid_info(session.sync_pulses, calcium_time)
+    first, last = grid["aligned_first_s"], grid["aligned_last_s"]
     trials = session.trials.copy()
     controls = _controls(session, cfg.control_gap_s)
     completed = trials.outcome != "incomplete"
@@ -256,34 +225,23 @@ def align_abet(session: AbetSession, cfg: AbetConfig, calcium_time) -> AbetResul
     markers = {}
     marker_offsets = {}
     exclusions = {}
-    if offset is not None:
-        for col in _TIMESTAMP_COLUMNS:
-            trials[col[:-2] + "_calcium_s"] = offset + scale * trials[col]
-        for label, native in groups.items():
-            onsets = offset + scale * np.asarray(native)
-            keep = (onsets >= first) & (onsets <= last)
-            exclusions[label] = int((~keep).sum())
-            if keep.any():
-                markers[label] = onsets[keep]
-                if label in (CUE_ALL, CUE_RESPONDED, CUE_TIMEOUT, CUE_SPECIAL):
-                    ends = onsets + scale * trials.loc[native.index, "cue_pulse_duration_s"].to_numpy()
-                    marker_offsets[label] = np.where(ends <= last, ends, np.nan)[keep]
-    warnings = session.warnings.copy()
-    if cfg.mode == "assumed_trigger":
-        warnings.append("Assumed trigger alignment: random startup delay and relative clock drift are unverified.")
-    elif cfg.mode == "offset":
-        warnings.append("Single measured anchor: relative clock drift is unverified.")
-    span = session.sync_pulses[-1] - session.sync_pulses[0] if len(session.sync_pulses) >= 2 else None
+    # Downstream calcium data now use the native ABET clock.
+    for col in _TIMESTAMP_COLUMNS:
+        trials[col[:-2] + "_calcium_s"] = trials[col]
+    for label, native in groups.items():
+        onsets = np.asarray(native, dtype=float)
+        keep = (onsets >= first) & (onsets <= last)
+        exclusions[label] = int((~keep).sum())
+        if keep.any():
+            markers[label] = onsets[keep]
+            if label in (CUE_ALL, CUE_RESPONDED, CUE_TIMEOUT, CUE_SPECIAL):
+                ends = onsets + trials.loc[native.index, "cue_pulse_duration_s"].to_numpy()
+                marker_offsets[label] = np.where(ends <= last, ends, np.nan)[keep]
     info = {
         "source": session.path, "source_sha256": session.sha256, "animal_id": session.animal_id,
         "session_id": session.session_id, "started_at": session.started_at,
-        "schedule": session.schedule, "mode": cfg.mode, "offset_s": offset, "scale": scale,
-        "anchors": np.asarray(cfg.anchors).tolist(), "sync_pulses_s": list(session.sync_pulses),
-        "latency_s": cfg.latency_s if cfg.mode == "assumed_trigger" else None,
-        "formula": "t_calcium = offset_s + scale * t_ABET" if offset is not None else None,
-        "duration_s": session.duration_s, "pulse_span_s": span, "calcium_first_s": first,
-        "calcium_last_s": last, "calcium_span_s": last - first,
-        "span_difference_s": None if span is None else last - first - span,
+        "schedule": session.schedule, "mode": DURATION_RESAMPLE, **grid,
+        "sync_pulses_s": list(session.sync_pulses), "duration_s": session.duration_s,
         "control_gap_s": cfg.control_gap_s, "scheduler_tolerance_s": SCHEDULER_TOLERANCE_S,
         "trial_rules": {
             "cue": "One trial per Pulse Output Event / Sound_On #1; observed XML sequence order.",
@@ -296,14 +254,8 @@ def align_abet(session: AbetSession, cfg: AbetConfig, calcium_time) -> AbetResul
         "control_rule": "Tray rises more than control_gap_s from other rises, cues through window close, and feeder commands.",
         "control_onsets_abet_s": controls.tolist(),
         "marker_counts_native": {label: len(values) for label, values in groups.items()},
-        "marker_counts_outside_calcium": exclusions, "warnings": warnings,
+        "marker_counts_outside_calcium": exclusions, "warnings": session.warnings.copy(),
     }
-    # Signed edge residuals require a clock identified independently of the recording boundaries.
-    info["first_frame_minus_mapped_start_s"] = None
-    info["last_frame_minus_mapped_end_s"] = None
-    if cfg.mode in ("offset", "affine") and len(session.sync_pulses) == 2:
-        info["first_frame_minus_mapped_start_s"] = first - (offset + scale * session.sync_pulses[0])
-        info["last_frame_minus_mapped_end_s"] = last - (offset + scale * session.sync_pulses[-1])
     return AbetResult(session, trials, markers, marker_offsets, info, controls)
 
 

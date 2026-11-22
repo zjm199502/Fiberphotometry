@@ -79,11 +79,15 @@ def _reader(raw, cfg):
               "excluded_channels": sorted(cfg.channels.exclusions_for(path))}
     if raw.manual_ttl_label:
         params["manual_ttl"] = {"label": raw.manual_ttl_label, "onsets_s": raw.markers[raw.manual_ttl_label]}
-        rules.append("手动 TTL 由用户在原始预览图点击，时间吸附到最近采集帧并按秒保存。只纳入记录覆盖范围内的时间点。"
+        rules.append("手动 TTL 由用户在预览图点击并吸附到该视图的采样帧，配置以原始采集秒保存。只纳入记录覆盖范围内的时间点。"
                      "每个点只有起始时刻，按终点对齐时沿用起始时刻。")
-    if raw.abet_marker_names:
+    if raw.abet_native is not None:
         params["abet_marker_labels"] = raw.abet_marker_names
-        rules.append("ABET 事件由行为时钟换算至本次钙采集时钟；时钟映射和依据见 ABET 阶段。")
+        native = raw.abet_native
+        params.update(acquisition_samples=len(native.time), acquisition_sampling_hz=native.fs,
+                      acquisition_time_range_s=[native.time[0], native.time[-1]])
+        rules.append("HDF5 的 data_A_acquisition 保存输入采集帧；data_A 使用两个 start #1 之间的均匀行为时钟。"
+                     "采集打标按同一时间伸缩，ABET 事件保留 XML 原始秒。")
     return _stage("read", "读取与通道", "recordings.read_recording / io_tdms.read_tdms", params, rules, refs)
 
 
@@ -92,6 +96,8 @@ def _behavior(raw, b):
     clock = ("t = 文件时间列 × 秒/原时间单位" if info.get("time_column") else "tᵢ = i / 行为采样率")
     clock += ("；T = t − t₀ + 钙记录首帧时间 + offset_s。" if info.get("align_starts")
               else "；T = t + offset_s。")
+    if raw.abet_native is not None:
+        clock += " 上式得到采集轴时刻，再按 ABET 阶段的公式伸缩至行为轴。"
     rule = {"linear": "v(t) = v₀ + (v₁−v₀)(t−t₀)/(t₁−t₀)。",
             "previous": "选取时间不晚于目标帧的最后一个行为样本。",
             "nearest": "选取与目标帧绝对时间差最小的样本，等距优先较早样本。"}[info["method"]]
@@ -108,11 +114,12 @@ def _preprocess(raw, b, cfg, lang):
               "output_samples": len(b.time), "output_range_s": [b.time[0], b.time[-1]], "output_hz": b.fs}
     refs, rules = [], [formula]
     if b.method.startswith("Plexon "):
-        rules.append("按选定信号区间逐帧读取设备比值，保留采集时间戳。")
+        rules.append("按选定信号区间使用重采样到行为时钟的设备 R 比值。" if raw.abet_native is not None
+                     else "按选定信号区间逐帧读取设备比值，保留采集时间戳。")
         refs.append("Plexon Multi-Wavelength Photometry User Guide")
     else:
         if cfg.signal_start_s is not None:
-            rules.append("按采集时间选闭区间 [signal_start_s, signal_end_s]，优先于首尾裁剪。")
+            rules.append("按 data A 时间轴选闭区间 [signal_start_s, signal_end_s]，优先于首尾裁剪。")
         else:
             rules.append("仅保留首尾裁剪范围内样本；随后才进行滤波及降采样。")
             if cfg.auto_trim and b.method != "signal_interval":
@@ -122,8 +129,11 @@ def _preprocess(raw, b, cfg, lang):
             rules.append("四阶 Butterworth 低通，二阶节正反向滤波。")
             refs += ["SciPy · butter", "SciPy · sosfiltfilt"]
         if b.fs != raw.fs:
-            params["bin_samples"] = round(raw.fs / b.fs)
-            rules.append("相邻 k 帧（k = round(fs / 目标频率)）的时间和幅值分别取均值；丢弃末尾未满 k 帧的块。")
+            if raw.abet_native is not None:
+                rules.append("重采样后的 ABET 数据降采样时先抗混叠，再均匀取样，保留所选有效信号区间的首末帧。")
+            else:
+                params["bin_samples"] = round(raw.fs / b.fs)
+                rules.append("相邻 k 帧（k = round(fs / 目标频率)）的时间和幅值分别取均值；丢弃末尾未满 k 帧的块。")
         if b.method == "isosbestic":
             rules.append("对照和常数项最小二乘初始化；s = median(|r−median(r)|)/0.6745，u = r/(4.685s)，"
                          "在 |u|<1 取 w=(1−u²)²，否则 w=0。对 sqrt(w) 加权后的设计和响应重复最小二乘，至收敛或 50 轮。")
@@ -260,7 +270,8 @@ def write_method_report(res, cfg):
     from . import __version__
 
     a, b = res.A, res.B
-    cfg = cfg.for_recording(a.source)
+    configured = cfg.for_recording(a.source).to_dict()  # saved window coordinates are acquisition seconds
+    cfg = cfg.for_recording(a.source, raw=a)
     stages = [_reader(a, cfg)]
     if a.behavior is not None:
         stages.append(_behavior(a, b))
@@ -269,13 +280,12 @@ def write_method_report(res, cfg):
         info["xml"] = str(a.abet.session.path)
         rules = ["试次和时间戳来源于关联 ABET XML 的声音、食槽灯、组切换、食槽传感器及给料器事件。",
                  "原始行为时钟、试次纳入情况和记录号见 abet/abet_trials.csv；同步参数见 abet/abet_alignment.json。"]
-        if info["mode"] != "behavior_only":
-            info["locked_analysis"] = json.loads((res.out_dir / "abet/locked/analysis.json").read_text(encoding="utf-8"))
-            rules += ["采集时间 = offset_s + scale × ABET 时间。assumed_trigger 标记由触发关系推定的同步；"
-                      "offset 用一个实测锚点平移；affine 用两个实测锚点估计偏移及速率。",
-                      "逐事件以 −3 至 0 秒均值归零，在 0 至 3 秒计算均值、带符号梯形积分与指定方向峰值。"
-                      "有效进槽与给食指令作为复合事件解释；常规提示按响应/超时分组。"]
-        stages.append(_stage("abet", "ABET 行为试次与时钟同步", "abet.read_abet / abet.align_abet", info, rules))
+        info["locked_analysis"] = json.loads((res.out_dir / "abet/locked/analysis.json").read_text(encoding="utf-8"))
+        rules += [info["formula"], info["grid_formula"], info["resampling"], info["gap_rule"],
+                  "首末帧对应两个 start #1 上升沿。峰值、AUC 和时长使用重采样后的行为轴。"
+                  "逐事件以 −3 至 0 秒均值归零，在 0 至 3 秒计算均值、带符号梯形积分与指定方向峰值。"
+                  "有效进槽与给食指令作为复合事件解释，常规提示按响应/超时分组。"]
+        stages.append(_stage("abet", "ABET 行为试次与钙信号重采样", "abet.read_abet / abet_resampling.resample_calcium", info, rules))
     stages.append(_preprocess(a, b, cfg.dedrift, cfg.plot.language))
     if res.C is not None:
         stages.append(_deconv(res, cfg.deconv))
@@ -295,7 +305,6 @@ def write_method_report(res, cfg):
             versions[package] = metadata.version(package)
         except metadata.PackageNotFoundError:
             versions[package] = getattr(sys.modules.get(module), "__version__", None)
-    configured = cfg.to_dict()
     # Never include associations or exclusion lists from other recordings in an export.
     key = str(Path(a.source).resolve())
     for mapping in [configured["channels"]["excluded_channels"], configured["behavior_by_recording"],

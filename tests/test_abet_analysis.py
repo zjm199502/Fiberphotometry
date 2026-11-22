@@ -18,7 +18,7 @@ def sample():
         (4, "incomplete", False, 34., np.nan, np.nan),
     ], columns=["trial", "outcome", "regular", "cue_on_s", "traylight_on_s", "tray_input_on_s"])
     return b, SimpleNamespace(trials=rows, control_onsets_s=[34.],
-                              info={"mode": "assumed_trigger", "offset_s": -1., "scale": 1., "latency_s": 1.})
+                              info={"mode": "duration_resample", "source_to_abet_scale": .95})
 
 
 def test_clock_trial_identity_and_metrics(tmp_path):
@@ -26,7 +26,7 @@ def test_clock_trial_identity_and_metrics(tmp_path):
     result = analyze_abet(b, aligned, peak_direction="negative")
     ledger = result.metrics
     cue = ledger.query("group == 'cue_responded'").iloc[0]
-    assert cue.trial == 2 and cue.abet_onset_s == 9 and cue.calcium_onset_s == 8
+    assert cue.trial == 2 and cue.abet_onset_s == 9 and cue.calcium_onset_s == 9
     assert cue.target_mean_dff == pytest.approx(3.05)
     assert cue.auc_target_dff == pytest.approx(9.15)
     assert cue.peak_dff == pytest.approx(1.55) and cue.peak_latency_s == 0.
@@ -38,7 +38,7 @@ def test_clock_trial_identity_and_metrics(tmp_path):
     export_abet_analysis(result, tmp_path)
     assert (tmp_path / "overview.png").stat().st_size > 1000
     assert pd.read_csv(tmp_path / "metrics.csv").shape == ledger.shape
-    assert result.parameters["alignment"]["latency_s"] == 1.
+    assert result.parameters["alignment"]["source_to_abet_scale"] == .95
 
 
 def test_unmapped_nonfinite_gaps_and_sparse_sessions():
@@ -46,7 +46,7 @@ def test_unmapped_nonfinite_gaps_and_sparse_sessions():
     aligned.info["mode"] = "behavior_only"
     with pytest.raises(ValueError):
         analyze_abet(b, aligned)
-    aligned.info["mode"] = "offset"
+    aligned.info["mode"] = "duration_resample"
     b.dff[80] = np.nan
     b.time[210:] += 2.
     result = analyze_abet(b, aligned)
@@ -60,7 +60,6 @@ def test_unmapped_nonfinite_gaps_and_sparse_sessions():
 
 def test_comparison_from_peri_event_button(qtbot, tmp_path, monkeypatch, abet_xml):
     from PySide6.QtWidgets import QDialog, QFileDialog, QPushButton
-    from fiberphoto.abet import AbetConfig
     from fiberphoto.gui.main_window import MainWindow
     from fiberphoto.gui.widgets import FigureView
     from fiberphoto.preprocess import dedrift
@@ -74,14 +73,13 @@ def test_comparison_from_peri_event_button(qtbot, tmp_path, monkeypatch, abet_xm
     window.step_read()
     qtbot.waitUntil(lambda: window.A is not None)
     window.B = dedrift(window.A, window.cfg.dedrift)
-    assert not window.b_abet_compare.isEnabled()
-    window.set_abet(AbetConfig(str(abet_xml), mode="assumed_trigger"))
+    window._update_clear_buttons()
     qtbot.waitUntil(window.b_abet_compare.isEnabled)
     folder = tmp_path / (recording.stem + "_ABET_comparison")
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *_: str(tmp_path))
 
     def inspect(dialog):
-        assert "Assumed trigger" in dialog.findChild(FigureView).canvas.figure._suptitle.get_text()
+        assert "resampled" in dialog.findChild(FigureView).canvas.figure._suptitle.get_text()
         save = next(button for button in dialog.findChildren(QPushButton) if "Export" in button.text())
         save.click()
         return QDialog.Rejected
@@ -89,4 +87,4 @@ def test_comparison_from_peri_event_button(qtbot, tmp_path, monkeypatch, abet_xm
     monkeypatch.setattr(QDialog, "exec", inspect)
     window.b_abet_compare.click()
     qtbot.waitUntil(lambda: (folder/"overview.png").exists(), timeout=12000)
-    assert set(pd.read_csv(folder/"metrics.csv").sync_mode) == {"assumed_trigger"}
+    assert set(pd.read_csv(folder/"metrics.csv").sync_mode) == {"duration_resample"}

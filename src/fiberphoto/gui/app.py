@@ -4,8 +4,7 @@ from __future__ import annotations
 import sys
 
 STYLE = """
-QWidget { font-size: 13px; }
-QGroupBox { font-weight: 600; border: 1px solid #dddcd6; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
+QGroupBox { font-weight: 600; border: 1px solid #dddcd6; border-radius: 6px; margin-top: 1ex; padding-top: 1ex; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
 QLabel#help { background: #eef4fc; color: #23466e; border-radius: 6px; padding: 8px 10px; }
 QPushButton, QToolButton {

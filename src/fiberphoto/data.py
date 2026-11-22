@@ -42,8 +42,30 @@ class RawData:
     manual_ttl_label: str = ""  # name of the manually annotated point series in markers
     abet: AbetResult | None = None  # runtime tables are exported separately in abet/
     abet_marker_names: dict[str, str] = field(default_factory=dict)  # canonical label -> data A label
+    abet_native: RawData | None = field(default=None, repr=False)  # immutable source grid for detach/reapply
+
+    def _grid_info(self):
+        if self.abet is not None:
+            return self.abet.info
+        # Reading data A from HDF5 restores both grids without reopening the XML.
+        t = self.abet_native.time
+        return {"aligned_first_s": self.time[0], "aligned_last_s": self.time[-1],
+                "source_first_s": t[0], "source_last_s": t[-1],
+                "source_to_abet_scale": (self.time[-1]-self.time[0]) / (t[-1]-t[0])}
+
+    def to_acquisition_time(self, value):
+        from .abet import behavior_to_source
+        return value if self.abet_native is None else behavior_to_source(value, self._grid_info())
+
+    def from_acquisition_time(self, value):
+        from .abet import source_to_behavior
+        return value if self.abet_native is None else source_to_behavior(value, self._grid_info())
 
     def with_manual_ttl(self, times):
+        if self.abet_native is not None:
+            native = self.abet_native.with_manual_ttl(times)
+            aligned = dataclasses.replace(self, abet_native=None).with_manual_ttl(self.from_acquisition_time(times))
+            return dataclasses.replace(aligned, abet_native=native)
         markers = dict(self.markers)
         if self.manual_ttl_label:
             markers.pop(self.manual_ttl_label, None)
@@ -135,7 +157,7 @@ def _write_group(h5: h5py.File, name: str, obj) -> None:
         del h5[name]
     g = h5.create_group(name)
     for k, v in vars(obj).items():
-        if k == "abet":
+        if k in ("abet", "abet_native"):
             continue
         if isinstance(v, np.ndarray):
             g.create_dataset(k, data=v, compression="gzip")
@@ -154,21 +176,26 @@ def _write_group(h5: h5py.File, name: str, obj) -> None:
             g.attrs[k] = v
 
 
-def save_stage(path: str | Path, stage: str, obj, csv: bool = False) -> Path:
+def save_stage(path: str | Path, stage: str, obj, csv: bool = False, *, full_precision=False) -> Path:
     """Write one stage ("A", "B" or "C") into the session HDF5 file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "a") as h5:
         _write_group(h5, f"data_{stage}", obj)
+        if isinstance(obj, RawData):
+            if obj.abet_native is not None:
+                _write_group(h5, "data_A_acquisition", obj.abet_native)
+            elif "data_A_acquisition" in h5:
+                del h5["data_A_acquisition"]
     if csv:
-        stage_to_csv(path.with_name(f"{path.stem}_data{stage}.csv"), obj)
+        stage_to_csv(path.with_name(f"{path.stem}_data{stage}.csv"), obj, full_precision=full_precision)
     return path
 
 
-def stage_to_csv(path: Path, obj) -> None:
+def stage_to_csv(path: Path, obj, *, full_precision=False) -> None:
     cols = {k: v for k, v in vars(obj).items()
             if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) == len(obj.time)}
-    precision = "%.17g" if obj.behavior is not None else "%.6g"
+    precision = "%.17g" if full_precision or obj.behavior is not None or getattr(obj, "abet_native", None) is not None else "%.6g"
     pd.DataFrame(cols).to_csv(path, index=False, float_format=precision)
     if isinstance(obj, RawData) and obj.markers:
         rows = []
@@ -181,20 +208,26 @@ def stage_to_csv(path: Path, obj) -> None:
 def load_stage(path: str | Path, stage: str):
     cls = {"A": RawData, "B": DffData, "C": DeconvData}[stage]
     with h5py.File(path, "r") as h5:
-        g = h5[f"data_{stage}"]
-        kw = {}
-        for k in cls.__dataclass_fields__:
-            if k in g and isinstance(g[k], h5py.Group):
-                sub = g[k]
-                kw[k] = {kk: sub[kk][()] for kk in sub} | dict(sub.attrs)
-            elif k in g:
-                kw[k] = g[k][()]
-            elif k in g.attrs:
-                v = g.attrs[k]
-                kw[k] = tuple(v) if k == "g" else (v.item() if hasattr(v, "item") and np.ndim(v) == 0 else v)
-            elif (cls.__dataclass_fields__[k].default is not dataclasses.MISSING
-                  or cls.__dataclass_fields__[k].default_factory is not dataclasses.MISSING):
-                continue  # field added later; older files fall back to its default
-            else:
-                kw[k] = None if k in ("control", "reference") else {}
+        obj = _read_group(h5[f"data_{stage}"], cls)
+        if stage == "A" and "data_A_acquisition" in h5:
+            obj.abet_native = _read_group(h5["data_A_acquisition"], RawData)
+    return obj
+
+
+def _read_group(g, cls):
+    kw = {}
+    for k in cls.__dataclass_fields__:
+        if k in g and isinstance(g[k], h5py.Group):
+            sub = g[k]
+            kw[k] = {kk: sub[kk][()] for kk in sub} | dict(sub.attrs)
+        elif k in g:
+            kw[k] = g[k][()]
+        elif k in g.attrs:
+            v = g.attrs[k]
+            kw[k] = tuple(v) if k == "g" else (v.item() if hasattr(v, "item") and np.ndim(v) == 0 else v)
+        elif (cls.__dataclass_fields__[k].default is not dataclasses.MISSING
+              or cls.__dataclass_fields__[k].default_factory is not dataclasses.MISSING):
+            continue  # field added later; older files fall back to its default
+        else:
+            kw[k] = None if k in ("control", "reference") else {}
     return cls(**kw)

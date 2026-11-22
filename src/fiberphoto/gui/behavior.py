@@ -18,6 +18,7 @@ class BehaviorDialog(QDialog):
         self.resize(490, 360)
         layout = QVBoxLayout(self)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         layout.addLayout(form)
         file_row = QHBoxLayout()
         self.filename = QLabel()

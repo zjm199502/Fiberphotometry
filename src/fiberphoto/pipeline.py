@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from . import analysis, plotting
-from .abet import AbetConfig
+from .abet import AbetConfig, DURATION_RESAMPLE
 from .abet_batch import attach_abet, export_recording_abet, find_abet_sidecar, load_abet_manifest
 from .behavior import BehaviorConfig, align_behavior, load_behavior_csv
 from .config import ChannelConfig, PipelineConfig
@@ -77,18 +77,28 @@ def pick_marker(a: RawData, wanted: str, align: str = "onset", shift_s: float = 
 
 
 def attach_behavior(raw: RawData, spec: BehaviorConfig | None) -> RawData:
+    source = raw.abet_native if raw.abet_native is not None else raw
     if spec is None:
-        return replace(raw, behavior=None, behavior_info={}, behavior_native={})
+        clean = replace(source, behavior=None, behavior_info={}, behavior_native={})
+        return (replace(raw, behavior=None, behavior_info={}, behavior_native={}, abet_native=clean)
+                if raw.abet_native is not None else clean)
     trace = load_behavior_csv(spec.path, spec.value_column, time_column=spec.time_column,
                               time_unit=spec.time_unit, sampling_rate_hz=spec.sampling_rate_hz)
-    mapped = replace(trace, time=trace.aligned_time(raw.time[0], offset_s=spec.offset_s,
+    mapped = replace(trace, time=trace.aligned_time(source.time[0], offset_s=spec.offset_s,
                                                    align_starts=spec.align_starts))
-    aligned = align_behavior(mapped, raw.time, method=spec.method)
+    aligned = align_behavior(mapped, source.time, method=spec.method)
     info = {k: v for k, v in asdict(spec).items() if v is not None}
     info.update(path=str(Path(spec.path).resolve()), value_column=trace.value_column,
-                valid_frames=int(np.isfinite(aligned).sum()), calcium_frames=len(raw.time))
+                valid_frames=int(np.isfinite(aligned).sum()), calcium_frames=len(source.time))
+    acquisition = replace(source, behavior=aligned, behavior_info=info,
+                          behavior_native={"time": mapped.time, "values": mapped.values})
+    if raw.abet_native is None:
+        return acquisition
+    mapped = replace(mapped, time=raw.from_acquisition_time(mapped.time))
+    aligned = align_behavior(mapped, raw.time, method=spec.method, require_overlap=False)
+    info = dict(info, valid_frames=int(np.isfinite(aligned).sum()), calcium_frames=len(raw.time), clock=DURATION_RESAMPLE)
     return replace(raw, behavior=aligned, behavior_info=info,
-                   behavior_native={"time": mapped.time, "values": mapped.values})
+                   behavior_native={"time": mapped.time, "values": mapped.values}, abet_native=acquisition)
 
 
 def read_with_behavior(path: str | Path, cfg: PipelineConfig) -> RawData:
@@ -139,7 +149,7 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", DataWarning)
-            dedrift_cfg = cfg.for_recording(path).dedrift
+            dedrift_cfg = cfg.for_recording(path, raw=a).dedrift
             b = dedrift(a, dedrift_cfg)
         log(tr("log_dedrift", lang, method=b.method))
         log(format_dff_formula(a, b, lang))
@@ -147,18 +157,19 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
             if issubclass(w.category, DataWarning):
                 log(f"⚠ {w.message}")
         res.B = b
-        save_stage(h5, "B", b, csv=cfg.save_csv)
+        save_stage(h5, "B", b, csv=cfg.save_csv, full_precision=a.abet is not None)
         progress(0.35)
 
         if cfg.deconv.enabled:
             c = deconvolve(b, cfg.deconv)
             res.C = c
             log(tr("log_deconv", lang, tau=decay_time_constant(c)))
-            save_stage(h5, "C", c, csv=cfg.save_csv)
+            save_stage(h5, "C", c, csv=cfg.save_csv, full_precision=a.abet is not None)
         progress(0.55)
 
         marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=b)
-        summary = {"file": path.name, "fs_raw_hz": a.fs, "fs_processed_hz": b.fs,
+        summary = {"file": path.name, "fs_raw_hz": a.abet_native.fs if a.abet_native is not None else a.fs,
+                   "fs_data_A_hz": a.fs, "fs_processed_hz": b.fs,
                    "duration_s": float(a.time[-1] - a.time[0]),
                    "indicator": a.indicator, "indicator_source": a.indicator_source, "dff_unit": b.unit,
                    "dedrift_method": b.method, "marker": marker, "n_markers": int(len(onsets))}
@@ -261,7 +272,7 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         report_path = out / "analysis_methods.json"
         previous = report_path.read_bytes() if stale else None
         try:
-            write_method_report(res, recording_cfg.for_recording(path))
+            write_method_report(res, recording_cfg)
             if stale:
                 archive = archive_superseded(out, stale, prefix="previous-abet-markers-") if stale_abet else archive_superseded(out, stale)
                 log(f"已归档旧打标结果 / Previous marker outputs archived: {archive}")
@@ -351,7 +362,7 @@ def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Pat
         pd.DataFrame(rows).to_csv(Path(out_root) / "batch_summary.csv", index=False, float_format="%.6g")
         groups = []
         for res, row in zip(results, rows):
-            if res.error or row.get("abet_mode") not in ("offset", "affine", "assumed_trigger"):
+            if res.error or row.get("abet_mode") != DURATION_RESAMPLE:
                 continue
             table = pd.read_csv(res.out_dir / "abet" / "locked" / "groups.csv")
             groups.append(table.assign(recording_path=row["recording_path"], animal_id=row["abet_animal_id"],

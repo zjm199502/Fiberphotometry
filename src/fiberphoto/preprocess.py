@@ -23,10 +23,16 @@ def highpass(x: np.ndarray, fs: float, cutoff: float, order: int = 2) -> np.ndar
     return sps.sosfiltfilt(sos, x)
 
 
-def downsample(t: np.ndarray, xs: list[np.ndarray], fs: float, target: float | None):
+def downsample(t: np.ndarray, xs: list[np.ndarray], fs: float, target: float | None, *, keep_endpoints=False):
     """Bin-average to roughly ``target`` Hz. Returns (t, xs, new_fs)."""
     if not target or target >= fs:
         return t, xs, fs
+    if keep_endpoints and len(t) >= 2:
+        from .abet_resampling import resample_channel
+        span = float(t[-1] - t[0])
+        steps = max(1, round(span * target))
+        grid = np.linspace(t[0], t[-1], steps + 1)
+        return grid, [resample_channel(t, x, grid, fs) for x in xs], steps / span
     k = int(round(fs / target))
     if k <= 1:
         return t, xs, fs
@@ -177,7 +183,8 @@ def _dedrift_fluorescence(raw: RawData, cfg: DedriftConfig) -> DffData:
     if cfg.lowpass_hz:
         sig = lowpass(sig, fs, cfg.lowpass_hz)
         ctl = lowpass(ctl, fs, cfg.lowpass_hz) if ctl is not None else None
-    t, (sig, ctl, sig_raw), fs = downsample(t, [sig, ctl, sig_raw], fs, cfg.downsample_hz)
+    t, (sig, ctl, sig_raw), fs = downsample(t, [sig, ctl, sig_raw], fs, cfg.downsample_hz,
+                                           keep_endpoints=raw.abet_native is not None)
 
     if selected and len(t) < 2:
         raise ValueError("降采样后区间内不足两个样本 / Signal interval too short for requested downsampling")

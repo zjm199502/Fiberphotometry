@@ -1,0 +1,38 @@
+name: Native desktop layout
+on:
+  push:
+    branches: [codex/gui-qa-066]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    name: ${{ matrix.os }} at ${{ matrix.scale }}x
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        scale: ['1', '1.5']
+    env:
+      PYTHONUTF8: '1'
+      QT_SCALE_FACTOR: ${{ matrix.scale }}
+      QT_QPA_PLATFORM: ${{ matrix.os == 'windows-latest' && 'windows' || 'cocoa' }}
+      FIBERLUME_LAYOUT_ARTIFACTS: layout-images
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e ".[gui,test]"
+      - run: python -m pytest tests/test_gui_layout.py -q --disable-warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: layout-${{ matrix.os }}-${{ matrix.scale }}
+          path: layout-images/
+          if-no-files-found: warn

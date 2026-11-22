@@ -22,7 +22,7 @@ def main(argv=None) -> int:
     r.add_argument("-o", "--out", default="results")
     r.add_argument("-c", "--config", help="parameters JSON")
     r.add_argument("--lang", choices=["zh", "en"])
-    r.add_argument("--abet-manifest", help="per-recording ABET clock mapping CSV")
+    r.add_argument("--abet-manifest", help="per-recording ABET XML association CSV")
 
     i = sub.add_parser("inspect", help="list channels and guessed roles")
     i.add_argument("file")

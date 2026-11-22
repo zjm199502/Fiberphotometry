@@ -11,7 +11,16 @@ from pathlib import Path
 from typing import Optional
 
 from .behavior import BehaviorConfig
-from .abet import AbetConfig
+from .abet import AbetConfig, DURATION_RESAMPLE
+
+
+def abet_association(spec):
+    """Migrate a saved association; older offsets and anchor pairs are obsolete."""
+    mode = spec.get("mode", DURATION_RESAMPLE)
+    if mode not in (DURATION_RESAMPLE, "disabled", "behavior_only", "assumed_trigger", "offset", "affine"):
+        raise ValueError(f"Unknown ABET association: {mode!r}")
+    return AbetConfig(path=spec.get("path", ""), control_gap_s=spec.get("control_gap_s", 3.),
+                      mode="disabled" if mode == "disabled" else DURATION_RESAMPLE)
 
 
 @dataclass
@@ -116,11 +125,17 @@ class PipelineConfig:
     intervals_by_recording: dict[str, dict] = field(default_factory=dict)
     manual_ttl_by_recording: dict[str, list[float]] = field(default_factory=dict)  # acquisition seconds in click order
 
-    def for_recording(self, path: str | Path | None) -> "PipelineConfig":
+    def for_recording(self, path: str | Path | None, raw=None) -> "PipelineConfig":
         overrides = self.intervals_by_recording.get(str(Path(path).resolve())) if path else None
-        if not overrides:
+        if not overrides and (raw is None or raw.abet_native is None):
             return self
-        return replace(self, dedrift=replace(self.dedrift, **overrides))
+        effective = replace(self.dedrift, **(overrides or {}))
+        if raw is not None and raw.abet_native is not None:
+            for key in ("signal_start_s", "signal_end_s", "baseline_start_s", "baseline_end_s"):
+                value = getattr(effective, key)
+                if value is not None:
+                    setattr(effective, key, float(raw.from_acquisition_time(value)))
+        return replace(self, dedrift=effective)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -132,9 +147,11 @@ class PipelineConfig:
             if f.name not in d:
                 continue
             sub = f.default_factory() if callable(f.default_factory) else None  # type: ignore[misc]
-            if f.name in ("behavior_by_recording", "abet_by_recording"):
-                config_type = BehaviorConfig if f.name == "behavior_by_recording" else AbetConfig
-                kwargs[f.name] = {str(Path(p).resolve()): config_type(**spec)
+            if f.name == "abet_by_recording":
+                kwargs[f.name] = {str(Path(p).resolve()): abet_association(spec)
+                                  for p, spec in d[f.name].items()}
+            elif f.name == "behavior_by_recording":
+                kwargs[f.name] = {str(Path(p).resolve()): BehaviorConfig(**spec)
                                   for p, spec in d[f.name].items()}
             elif f.name == "manual_ttl_by_recording":
                 kwargs[f.name] = {str(Path(p).resolve()): list(points) for p, points in d[f.name].items()}

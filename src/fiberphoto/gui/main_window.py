@@ -14,7 +14,7 @@ import numpy as np
 from PySide6.QtCore import QSettings, QSize, QStandardPaths, Qt, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWidget, QFileDialog,
-                               QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                               QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QSpinBox, QSplitter, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
@@ -27,7 +27,7 @@ from ..recordings import device_traces
 from ..pipeline import attach_abet, attach_behavior, pick_marker, read_with_behavior, run_batch, run_file
 from ..abet import AbetConfig
 from ..abet_batch import find_abet_sidecar
-from .abet import AbetDialog, mode_label
+from .abet import AbetDialog
 from .behavior import BehaviorDialog
 from .event_table import EventTableModel
 from .baseline import BaselinePicker
@@ -52,7 +52,6 @@ def _scroll(w: QWidget) -> QScrollArea:
     sa.setWidget(w)
     sa.setWidgetResizable(True)
     sa.setFrameShape(QScrollArea.NoFrame)
-    sa.setMinimumWidth(340)
     return sa
 
 
@@ -96,12 +95,14 @@ class MainWindow(QMainWindow):
         self._build_log()
 
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(self.files_box)
+        split.addWidget(_scroll(self.files_box))
+        split.setChildrenCollapsible(False)
         split.addWidget(self.tabs)
         split.setStretchFactor(1, 1)
         split.setSizes([240, 1160])
         self.setCentralWidget(split)
-        self.resize(1400, 900)
+        screen = self.screen().availableGeometry()
+        self.resize(min(1400, int(screen.width() * .97)), min(900, int(screen.height() * .92)))
 
         self.forms_load()
         self.retranslate()
@@ -223,17 +224,20 @@ class MainWindow(QMainWindow):
     def _build_tabs(self):
         self.clear_buttons = {}
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._tab_read(), "")
-        self.tabs.addTab(self._tab_pre(), "")
-        self.tabs.addTab(self._tab_peth(), "")
-        self.tabs.addTab(self._tab_events(), "")
-        self.tabs.addTab(self._tab_export(), "")
+        self.tabs.addTab(_scroll(self._tab_read()), "")
+        self.tabs.addTab(_scroll(self._tab_pre()), "")
+        self.tabs.addTab(_scroll(self._tab_peth()), "")
+        self.tabs.addTab(_scroll(self._tab_events()), "")
+        self.tabs.addTab(_scroll(self._tab_export()), "")
 
     # tab ① ----------------------------------------------------------------
     def _tab_read(self):
         w = QWidget()
         v = QVBoxLayout(w)
         self.help_read = self._page_header(v, "read")
+        controls = QWidget()
+        inputs = QVBoxLayout(controls)
+        inputs.setContentsMargins(0, 0, 0, 0)
         behavior_row = QHBoxLayout()
         self.b_behavior = QPushButton(clicked=self.pick_behavior_csv)
         self.b_behavior_clear = QPushButton(clicked=lambda: self.set_behavior(None))
@@ -248,12 +252,12 @@ class MainWindow(QMainWindow):
         behavior_row.addWidget(self.b_behavior)
         behavior_row.addWidget(self.b_behavior_clear)
         behavior_row.addWidget(self.lbl_behavior, 1)
-        v.addLayout(behavior_row)
+        inputs.addLayout(behavior_row)
         abet_row = QHBoxLayout()
         abet_row.addWidget(self.b_abet)
         abet_row.addWidget(self.b_abet_clear)
         abet_row.addWidget(self.lbl_abet, 1)
-        v.addLayout(abet_row)
+        inputs.addLayout(abet_row)
 
         top = QWidget()
         h = QHBoxLayout(top)
@@ -315,7 +319,7 @@ class MainWindow(QMainWindow):
         f.addRow(self.lbl_fs_missing)
         f.addRow(self.lbl_map[5], mf)
         self.b_read = _primary(QPushButton(clicked=self.step_read))
-        f.addRow(self.b_read)
+
         self.lbl_markers_found = QLabel()
         self.lbl_markers_found.setWordWrap(True)
         f.addRow(self.lbl_markers_found)
@@ -323,15 +327,22 @@ class MainWindow(QMainWindow):
 
         self.fig_raw = FigureView()
         self.baseline_picker = BaselinePicker(self)
-        raw_panel = QWidget()
-        raw_layout = QVBoxLayout(raw_panel)
-        raw_layout.setContentsMargins(0, 0, 0, 0)
-        raw_layout.addWidget(self.baseline_picker)
-        raw_layout.addWidget(self.fig_raw, 1)
+        inputs.addWidget(top, 1)
+        inputs.addWidget(self.baseline_picker)
+        control_scroll = _scroll(controls)
+        control_scroll.setMinimumHeight(6 * self.fontMetrics().height())
+        self.read_controls = control_scroll
+        top_panel = QWidget()
+        top_layout = QVBoxLayout(top_panel)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.addWidget(control_scroll, 1)
+        top_layout.addWidget(self.b_read)
         split = QSplitter(Qt.Vertical)
-        split.addWidget(top)
-        split.addWidget(raw_panel)
-        split.setSizes([300, 500])
+        split.setChildrenCollapsible(False)
+        split.addWidget(top_panel)
+        split.addWidget(self.fig_raw)
+        self.fig_raw.setMinimumHeight(14 * self.fontMetrics().height())
+        split.setSizes([340, 400])
         v.addWidget(split, 1)
         return w
 
@@ -365,10 +376,14 @@ class MainWindow(QMainWindow):
         self.fig_dedrift = FigureView()
         self.fig_deconv = FigureView()
         right = QSplitter(Qt.Vertical)
+        right.setChildrenCollapsible(False)
         right.addWidget(self.fig_dedrift)
         right.addWidget(self.fig_deconv)
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(_scroll(left))
+        split.setChildrenCollapsible(False)
+        controls = _scroll(left)
+        controls.setMinimumWidth(14 * self.fontMetrics().height())
+        split.addWidget(controls)
         split.addWidget(right)
         split.setSizes([380, 900])
         v.addWidget(split, 1)
@@ -412,11 +427,15 @@ class MainWindow(QMainWindow):
         self.peth_views.addTab(self.fig_peth_dff, "")
         self.peth_views.currentChanged.connect(self._draw_peth_comparisons)
         right = QSplitter(Qt.Horizontal)
+        right.setChildrenCollapsible(False)
         right.addWidget(self.peth_views)
         right.addWidget(self.fig_auc)
         right.setSizes([560, 340])
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(_scroll(left))
+        split.setChildrenCollapsible(False)
+        controls = _scroll(left)
+        controls.setMinimumWidth(14 * self.fontMetrics().height())
+        split.addWidget(controls)
         split.addWidget(right)
         split.setSizes([380, 900])
         v.addWidget(split, 1)
@@ -453,14 +472,19 @@ class MainWindow(QMainWindow):
         self.fig_dist = FigureView()
         self.fig_rate = FigureView()
         bottom = QSplitter(Qt.Horizontal)
+        bottom.setChildrenCollapsible(False)
         bottom.addWidget(self.fig_dist)
         bottom.addWidget(self.fig_rate)
         bottom.setSizes([600, 300])
         right = QSplitter(Qt.Vertical)
+        right.setChildrenCollapsible(False)
         right.addWidget(self.fig_events)
         right.addWidget(bottom)
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(_scroll(left))
+        split.setChildrenCollapsible(False)
+        controls = _scroll(left)
+        controls.setMinimumWidth(14 * self.fontMetrics().height())
+        split.addWidget(controls)
         split.addWidget(right)
         split.setSizes([380, 900])
         v.addWidget(split, 1)
@@ -473,6 +497,7 @@ class MainWindow(QMainWindow):
         self.help_export = self._page_header(v, "export")
         self.box_out = QGroupBox()
         f = QFormLayout(self.box_out)
+        f.setRowWrapPolicy(QFormLayout.WrapLongRows)
         orow = QHBoxLayout()
         self.out_dir = QLineEdit(self.settings.value("out_dir", ""))
         self.b_out = QPushButton(clicked=self.pick_out_dir)
@@ -508,14 +533,13 @@ class MainWindow(QMainWindow):
         f.addRow(self.lbl_manifest, manifest_row)
         v.addWidget(self.box_out)
 
-        brow = QHBoxLayout()
+        brow = QGridLayout()
         self.b_export = _primary(QPushButton(clicked=self.export_current))
         self.b_batch = _primary(QPushButton(clicked=self.run_batch))
         self.b_cancel = QPushButton(clicked=self.cancel)
         self.b_open_out = QPushButton(clicked=self.open_out_dir)
-        for b in (self.b_export, self.b_batch, self.b_cancel, self.b_open_out):
-            brow.addWidget(b)
-        brow.addStretch(1)
+        for i, button in enumerate((self.b_export, self.b_batch, self.b_open_out, self.b_cancel)):
+            brow.addWidget(button, i // 2, i % 2)
         v.addLayout(brow)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -627,8 +651,8 @@ class MainWindow(QMainWindow):
         self.b_abet_compare.setText("Compare ABET cue and tray groups…" if self.lang == "en"
                                     else "比较 ABET 声音与进槽分组…")
         self.b_abet_compare.setToolTip(
-            "Requires preprocessed data and an ABET clock mapping. Baseline −3 to 0 s, response 0 to 3 s."
-            if self.lang == "en" else "先预处理并确认 ABET 时钟映射。逐试次基线 −3 至 0 秒，响应窗 0 至 3 秒。")
+            "Requires preprocessed calcium resampled to the ABET interval. Baseline −3 to 0 s, response 0 to 3 s."
+            if self.lang == "en" else "先读取 ABET 数据并预处理重采样后的钙信号。逐试次基线 −3 至 0 秒，响应窗 0 至 3 秒。")
         self.box_trials.setTitle(t("trial_table"))
         self.peth_views.setTabText(0, t("view_z"))
         self.peth_views.setTabText(1, t("view_dff"))
@@ -642,9 +666,9 @@ class MainWindow(QMainWindow):
         for lab, k in zip(self.lbl_out, ("lbl_outdir", "lbl_formats", "lbl_dpi", "lbl_fig_lang", "lbl_csv")):
             lab.setText(t(k))
         self.b_out.setText(t("browse"))
-        self.lbl_manifest.setText("ABET 批处理同步清单" if self.lang == "zh" else "ABET batch clock manifest")
-        self.abet_manifest.setPlaceholderText("可选 CSV；按每条记录设置同步" if self.lang == "zh"
-                                             else "Optional CSV with per-recording clock settings")
+        self.lbl_manifest.setText("ABET 批处理文件清单" if self.lang == "zh" else "ABET batch file list")
+        self.abet_manifest.setPlaceholderText("可选 CSV，用于指定各记录对应的 XML" if self.lang == "zh"
+                                             else "Optional CSV of recording and XML file pairs")
         self.b_manifest.setText(t("browse"))
         self.b_manifest_template.setText("导出清单模板" if self.lang == "zh" else "Save template")
         self.b_export.setText(t("btn_export_one"))
@@ -680,7 +704,7 @@ class MainWindow(QMainWindow):
             form.labels[name].setVisible(visible)
 
     def _load_dedrift(self):
-        effective = self.cfg.for_recording(self.current)
+        effective = self.cfg.for_recording(self.current, raw=self.A)
         self.form_dedrift.load(effective)
         self.baseline_picker.previous_source = None
         if effective.dedrift.method == "signal_interval" and self.cfg.dedrift.method != "signal_interval":
@@ -711,9 +735,20 @@ class MainWindow(QMainWindow):
         edited = replace(self.cfg, dedrift=replace(base))
         self.form_dedrift.store(edited)
         values = edited.dedrift
+        # Store coordinates in acquisition seconds so changing XML preserves the same recorded interval.
+        coords = ("signal_start_s", "signal_end_s", "baseline_start_s", "baseline_end_s")
+        if self.A is not None and self.A.abet is not None:
+            prior = self.cfg.for_recording(self.current).dedrift
+            for key in coords:
+                value = getattr(values, key)
+                if value is not None:
+                    stored = getattr(prior, key)
+                    if stored is None or abs(value - self.A.from_acquisition_time(stored)) > 0.00000051:
+                        stored = float(self.A.to_acquisition_time(value))
+                    setattr(values, key, stored)
         # The four clock coordinates belong to this file. Selecting a baseline
         # also overrides the global method and the Plexon R preference for it.
-        local = {"signal_start_s", "signal_end_s", "baseline_start_s", "baseline_end_s"}
+        local = set(coords)
         if "signal_interval" in (base.method, values.method):
             local.update(("method", "prefer_plexon_dff"))
         self.cfg.dedrift = replace(values, **{key: getattr(base, key) for key in local})
@@ -919,6 +954,7 @@ class MainWindow(QMainWindow):
 
     def _channels_changed(self):
         self._reset_results()
+        self._load_dedrift()
         self.lbl_pre.clear()
         self.lbl_export.clear()
         self._refresh_marker_choices()
@@ -1051,7 +1087,7 @@ class MainWindow(QMainWindow):
 
     def _sync_abet(self):
         zh = self.lang == "zh"
-        self.b_abet.setText("ABET 行为试次与同步…" if zh else "ABET trials and sync…")
+        self.b_abet.setText("ABET 行为试次与重采样…" if zh else "ABET trials and resampling…")
         self.b_abet.setEnabled(not self._busy)
         self.b_abet_clear.setText("解除 ABET 关联" if zh else "Unlink ABET")
         key = str(self.current.resolve()) if self.current else None
@@ -1067,12 +1103,11 @@ class MainWindow(QMainWindow):
         result = self.A.abet if self.A is not None else None
         if result is not None:
             n = len(result.trials)
-            label = mode_label(result.info["mode"], self.lang)
-            status = f"{n} 试次 · {label}" if zh else f"{n} trials · {label}"
-        elif spec is None:
-            status = "同名 XML · 仅行为" if zh else "Matching XML · behavior only"
+            count = result.info["aligned_samples"]
+            status = (f"{n} 个试次 · 已重采样 {count:,} 帧" if zh else
+                      f"{n} trials · {count:,} resampled frames")
         else:
-            status = mode_label(spec.mode, self.lang)
+            status = "读取后按行为时长重采样" if zh else "Resample to the behavior interval on load"
         self.lbl_abet.setText(f"{path.name} · {status}" if path else "")
 
     def pick_abet(self):
@@ -1087,7 +1122,8 @@ class MainWindow(QMainWindow):
             return
         previous = previous if previous and Path(previous.path) == Path(path) else None
         try:
-            dialog = AbetDialog(path, self.lang, self, previous, self.A.time if self.A is not None else None,
+            native = (self.A.abet_native or self.A) if self.A is not None else None
+            dialog = AbetDialog(path, self.lang, self, previous, native.time if native is not None else None,
                                 standalone=self.current is None)
         except (ValueError, OSError) as exc:
             self.error(str(exc))
@@ -1108,6 +1144,9 @@ class MainWindow(QMainWindow):
         raw = self.A
         selected = self.cb_marker_use.currentText()
 
+        if raw is not None:
+            self._store_dedrift()
+
         def apply(aligned):
             self.cfg.abet_by_recording[key] = spec
             if aligned is not None:
@@ -1115,18 +1154,10 @@ class MainWindow(QMainWindow):
                 self.cfg.peth.marker = selected
                 self._refresh_marker_choices()
                 self.cfg.peth.marker = self.cb_marker_use.currentText()
-
-                def changed(label):
-                    if label not in aligned.markers or label not in raw.markers:
-                        return True
-                    return any(not np.array_equal(old.get(label, []), new.get(label, []), equal_nan=True)
-                               for old, new in ((raw.markers, aligned.markers),
-                                                (raw.marker_offsets, aligned.marker_offsets)))
-
-                if self.peth is not None and changed(self.peth.marker):
-                    self.peth = None
-                if self.stim_events is not None and changed(self.stim_events.attrs.get("marker")):
-                    self.stim_events = None
+                # The source samples and clock can both change when linking a session.
+                self.B = self.C = self.peth = self.events = self.stim_events = None
+                self.lbl_pre.clear()
+                self._load_dedrift()
             self.lbl_export.clear()
             self.progress.reset()
             self.redraw_all()
@@ -1196,6 +1227,7 @@ class MainWindow(QMainWindow):
                 return
             points = points[:-1]
         else:
+            timestamp = float(self.A.to_acquisition_time(timestamp))
             if timestamp in points:
                 return
             points = [*points, timestamp]
@@ -1251,6 +1283,7 @@ class MainWindow(QMainWindow):
         if page == "read":
             self.forms_store()
             self.A = None
+            self._load_dedrift()
             self.baseline_picker.bind(None)
             self.fig_raw.set_figure(None)
             self._refresh_marker_choices()
@@ -1334,6 +1367,7 @@ class MainWindow(QMainWindow):
         def done(a):
             self._reset_results()
             self.A = a
+            self._load_dedrift()
             self._loaded_once = True
             self.lbl_pre.clear()
             self.log(plotting_tr("log_read", self.lang, name=path.name))
@@ -1348,6 +1382,7 @@ class MainWindow(QMainWindow):
         if self.A is None:
             self.b_read.setFocus()
         else:
+            self.read_controls.ensureWidgetVisible(self.baseline_picker.signal_button)
             self.baseline_picker.signal_button.setFocus()
 
     def _confirm_preprocessing(self, raw, cfg):
@@ -1395,7 +1430,7 @@ class MainWindow(QMainWindow):
     def step_pre(self):
         if not self._need("file", "A"):
             return
-        cfg = self.forms_store().for_recording(self.current)
+        cfg = self.forms_store().for_recording(self.current, raw=self.A)
         a = self.A
         if not self._confirm_preprocessing(a, cfg):
             return
@@ -1483,7 +1518,6 @@ class MainWindow(QMainWindow):
         kind = "z" if self.peth_views.currentIndex() == 0 else "dff"
         fig = plotting.fig_peth_comparisons(self.peth, self.lang, kind=kind)
         plt.close(fig)
-        fig.set_layout_engine("tight")
         self.fig_auc.set_figure(fig)
 
     def _fill_trial_table(self):
@@ -1546,7 +1580,6 @@ class MainWindow(QMainWindow):
             fig = make() if make else None
             if fig is not None:
                 plt.close(fig)  # detach from pyplot; the canvas keeps it alive
-                fig.set_layout_engine("tight")  # re-run the layout whenever the panel is resized
             view.set_figure(fig)
 
         put(self.fig_raw, (lambda: plotting.fig_raw(self.A, lang)) if self.A is not None else None)
@@ -1588,7 +1621,7 @@ class MainWindow(QMainWindow):
 
     def save_abet_manifest_template(self):
         from ..abet_batch import write_abet_manifest_template
-        path, _ = QFileDialog.getSaveFileName(self, self.b_manifest_template.text(), "abet_sync.csv", "CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, self.b_manifest_template.text(), "abet_files.csv", "CSV (*.csv)")
         if path:
             recordings = [self.file_list.item(i).data(Qt.UserRole) for i in range(self.file_list.count())]
             try:
@@ -1621,7 +1654,7 @@ class MainWindow(QMainWindow):
                 return
             msg = self.t("export_done", path=res.out_dir)
             if "abet_mode" in res.summary:
-                msg += "\nABET · " + mode_label(res.summary["abet_mode"], self.lang)
+                msg += "\n" + ("钙信号已按 ABET 时长重采样" if self.lang == "zh" else "Calcium resampled to the ABET interval")
             self.lbl_export.setText(msg)
 
         self._run(lambda log, progress: run_file(path, cfg, out, log, progress), done, pass_callbacks=True)
@@ -1647,10 +1680,10 @@ class MainWindow(QMainWindow):
         def done(results):
             ok = sum(1 for r in results if not r.error)
             msg = self.t("batch_done", ok=ok, bad=len(results) - ok, path=out)
-            modes = [r.summary["abet_mode"] for r in results if not r.error and "abet_mode" in r.summary]
-            if modes:
-                counts = {mode: modes.count(mode) for mode in dict.fromkeys(modes)}
-                msg += "\nABET · " + ", ".join(f"{mode_label(mode, self.lang)} ({count})" for mode, count in counts.items())
+            count = sum(bool(r.summary.get("abet_mode")) for r in results if not r.error)
+            if count:
+                msg += (f"\n{count} 份记录已按 ABET 时长重采样" if self.lang == "zh" else
+                        f"\n{count} recordings resampled to their ABET intervals")
             self.lbl_export.setText(msg)
             self.log(msg)
 
@@ -1695,9 +1728,7 @@ class MainWindow(QMainWindow):
 
     def _update_clear_buttons(self):
         aligned = getattr(self.A, "abet", None)
-        self.b_abet_compare.setEnabled(self.B is not None and aligned is not None and
-                                       aligned.info["mode"] in ("offset", "affine", "assumed_trigger")
-                                       and not self._busy)
+        self.b_abet_compare.setEnabled(self.B is not None and aligned is not None and not self._busy)
         ready = {"read": self.A is not None, "pre": self.B is not None,
                  "peth": self.peth is not None, "events": self.events is not None,
                  "export": bool(self.lbl_export.text()) or self.progress.value() >= 0}

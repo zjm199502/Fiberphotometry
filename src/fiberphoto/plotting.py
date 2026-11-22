@@ -6,6 +6,7 @@ canvas; ``save_figure`` writes it to disk in the configured formats.
 from __future__ import annotations
 
 from pathlib import Path
+from textwrap import fill
 from typing import Optional
 
 import matplotlib
@@ -78,6 +79,19 @@ def set_stimulus_lines(ax, onsets, label: Optional[str] = None):
     ax.add_collection(lines, autolim=False)
 
 
+def _outside_legend(fig, axes, columns=2):
+    """Reserve a figure margin for labels across all plotted series."""
+    for legend in list(fig.legends):
+        legend.remove()
+    unique = {}
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        unique.update(zip(labels, handles))
+    if unique:
+        fig.legend(list(unique.values()), [fill(label, 28) for label in unique],
+                   loc="outside lower center", ncols=min(columns, len(unique)), fontsize=8)
+
+
 def update_manual_ttl_overlay(axes, raw):
     """Update the editable marker series without rescaling the raw trace."""
     points = raw.markers.get(raw.manual_ttl_label, ())
@@ -91,16 +105,14 @@ def update_manual_ttl_overlay(axes, raw):
                                    linewidths=1.1, linestyles="dashed", label=raw.manual_ttl_label)
             lines.set_gid("manual-ttl")
             ax.add_collection(lines, autolim=False)
-    handles, _ = axes[0].get_legend_handles_labels()
-    if handles:
-        axes[0].legend(loc="upper right", ncol=min(len(handles), 4))
-    elif axes[0].get_legend() is not None:
-        axes[0].get_legend().remove()
+    _outside_legend(axes[0].figure, axes[:1])
 
 
 def fig_raw(a: RawData, lang: str = "zh") -> Figure:
     nrow = 1 + int(a.control is not None) + int(a.behavior is not None)
-    fig, axes = plt.subplots(nrow, 1, figsize=(10, 2.2 * nrow), sharex=True, squeeze=False)
+    legend_rows = sum(len(fill(label, 28).splitlines()) for label in a.markers)
+    fig, axes = plt.subplots(nrow, 1, figsize=(10, 2.35 * nrow + .22 * np.ceil(legend_rows / 2)),
+                             layout="constrained", sharex=True, squeeze=False)
     axes = axes[:, 0]
     name = a.channel_names.get("preview_signal") or a.channel_names.get("signal", "")
     ratio = a.exported_dff is not None and name == a.channel_names.get("exported_dff")
@@ -124,18 +136,16 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
     update_manual_ttl_overlay(axes, a)
     axes[-1].set_xlabel(tr("time_s", lang))
     axes[0].set_title(tr("raw_title", lang), loc="left")
-    fig.tight_layout()
     return fig
 
 
 def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True, layout="constrained")
     plot_trace(ax1, b.time, b.signal, color=C_SIGNAL, lw=0.7, label=tr("signal", lang))
     if b.reference is not None:
         reference = "F0" if b.method == "signal_interval" else tr("reference", lang)
         plot_trace(ax1, b.time, b.reference, color=C_CONTROL, lw=1.2, label=reference)
     ax1.set_ylabel(tr("fluor", lang))
-    ax1.legend(loc="upper right", ncol=2)
     plot_trace(ax2, b.time, b.dff, color=C_SIGNAL, lw=0.6)
     set_stimulus_lines(ax2, onsets, tr("stimulus", lang))
     ax2.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
@@ -146,13 +156,13 @@ def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
         title += f" · {window:g} s " + ("滑动中位数校正" if lang == "zh" else "rolling median correction")
         ax2.axhline(0, color=INK_2, lw=.7, ls="--", zorder=0)
     ax1.set_title(title, loc="left")
-    fig.tight_layout()
+    _outside_legend(fig, (ax1, ax2), 3)
     return fig
 
 
 def fig_deconv(c: DeconvData, b: DffData, ev: EventResult, onsets=(), lang: str = "zh") -> Figure:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True,
-                                   gridspec_kw={"height_ratios": [3, 1]})
+                                   gridspec_kw={"height_ratios": [3, 1]}, layout="constrained")
     plot_trace(ax1, b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
     plot_trace(ax1, c.time, c.denoised, color=C_DENOISED, lw=1.0, label=tr("denoised", lang))
     if ev.method == "peak" and np.isfinite(ev.threshold):
@@ -167,15 +177,13 @@ def fig_deconv(c: DeconvData, b: DffData, ev: EventResult, onsets=(), lang: str 
                  label=tr("event_peaks", lang), zorder=4)
     set_stimulus_lines(ax1, onsets)
     ax1.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
-    ax1.legend(loc="upper right", ncol=4)
     plot_trace(ax2, c.time, c.spikes, spikes=True, color=INK_2, lw=0.6)
     if ev.method == "oasis" and np.isfinite(ev.threshold):
         ax2.axhline(ev.threshold, color=C_EVENT, lw=0.8, ls="--", label=tr("threshold", lang))
-        ax2.legend(loc="upper right")
     ax2.set_ylabel(tr("spikes", lang))
     ax2.set_xlabel(tr("time_s", lang))
     ax1.set_title(tr("deconv_title", lang), loc="left")
-    fig.tight_layout()
+    _outside_legend(fig, (ax1, ax2), 3)
     return fig
 
 
@@ -199,38 +207,35 @@ def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=Non
     """Heatmap of every trial above the mean ± SEM trace; ``kind`` is "z" or "dff"."""
     trials = p.get(kind)
     label = _kind_label(kind, p.dff_unit, lang)
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5, 6), sharex=True,
-                                   gridspec_kw={"height_ratios": [1.2, 1]})
+    fig = plt.figure(figsize=(5.8, 6), layout="constrained")
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.2, 1], width_ratios=[25, 1])
+    ax1 = fig.add_subplot(grid[0, 0])
+    ax2 = fig.add_subplot(grid[1, 0], sharex=ax1)
     if trials.size:
         vmax = np.nanpercentile(np.abs(trials), 99) or 1.0
         norm = TwoSlopeNorm(vcenter=0, vmin=-vmax, vmax=vmax)
         im = ax1.imshow(trials, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest",
                         extent=[p.t_rel[0], p.t_rel[-1], trials.shape[0] + 0.5, 0.5])
-        cb = fig.colorbar(im, ax=ax1, pad=0.02, fraction=0.05)
+        cb = fig.colorbar(im, cax=fig.add_subplot(grid[0, 1]))
         cb.set_label(label)
         cb.outline.set_visible(False)
     ax1.axvline(0, color=INK, lw=0.8)
     ax1.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
     ax1.tick_params(labelbottom=True)
     ax1.set_ylabel(tr("trial", lang))
-    ax1.set_title(f"{tr('heatmap_title', lang)} · {p.marker} · {label}", loc="left")
+    ax1.set_title(fill(f"{tr('heatmap_title', lang)} · {p.marker}", 38), loc="left")
 
     _shade_windows(ax2, cfg_peth, lang)
     if trials.size:
         m, s = p.mean(kind), p.sem(kind)
         ax2.fill_between(p.t_rel, m - s, m + s, color=C_SIGNAL, alpha=0.25, lw=0)
         ax2.plot(p.t_rel, m, color=C_SIGNAL, lw=2, label=f"{tr('mean_sem', lang)} (n={len(trials)})")
-        # below the axis so it never covers the response
-        ax2.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28), ncol=3, fontsize=7.5)
     ax2.axvline(0, color=INK, lw=0.8)
     ax2.axhline(0, color=GRID, lw=0.8, zorder=0)
     ax2.set_ylabel(label)
     ax2.set_xlabel(tr("time_rel", lang))
     ax2.set_title(tr("peth_title", lang), loc="left")
-    # keep the heatmap and trace x-extents aligned despite the colourbar
-    fig.tight_layout()
-    pos1, pos2 = ax1.get_position(), ax2.get_position()
-    ax2.set_position([pos2.x0, pos2.y0, pos1.width, pos2.height])
+    _outside_legend(fig, [ax2], 2)
     return fig
 
 
@@ -267,9 +272,9 @@ def fig_peth_comparisons(p: PethResult, lang: str = "zh", *, kind=None, metric="
     """Show both measures in the active GUI unit, or export one measure in both units."""
     panels = [("auc", kind), ("peak", kind)] if kind else [(metric, "z"), (metric, "dff")]
     if kind or vertical:
-        fig, axes = plt.subplots(2, 1, figsize=(3.5, 6.4))
+        fig, axes = plt.subplots(2, 1, figsize=(3.5, 6.4), layout="constrained")
     else:
-        fig, axes = plt.subplots(1, 2, figsize=(7, 3.9))
+        fig, axes = plt.subplots(1, 2, figsize=(7, 3.9), layout="constrained")
     for ax, (measure, scale) in zip(axes, panels):
         pre, post = p.paired_values(measure, scale)
         unit = "z" if scale == "z" else p.dff_unit
@@ -280,7 +285,6 @@ def fig_peth_comparisons(p: PethResult, lang: str = "zh", *, kind=None, metric="
         _paired_plot(ax, pre, post, lang, ylabel, title, stats, labels=("baseline_win", "target_win"))
         if stats["n"] < 3 or not np.isfinite(stats["wilcoxon_p"]):
             ax.set_title(f"{title}\nn = {stats['n']}", loc="left")
-    fig.tight_layout()
     return fig
 
 
@@ -289,7 +293,7 @@ def fig_auc(p: PethResult, lang: str = "zh", vertical: bool = False) -> Figure:
 
 
 def fig_event_distributions(ev: EventResult, lang: str = "zh", unit: str = "%") -> Figure:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 3))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 3), layout="constrained")
     e = ev.events
     if len(e):
         ax1.hist(e["amplitude"], bins=min(30, max(5, len(e) // 3)), color=C_SIGNAL,
@@ -303,15 +307,13 @@ def fig_event_distributions(ev: EventResult, lang: str = "zh", unit: str = "%") 
     ax1.set_title(tr("amp_hist", lang), loc="left")
     ax2.set_xlabel(tr("iei_s", lang))
     ax2.set_title(tr("iei_hist", lang), loc="left")
-    fig.tight_layout()
     return fig
 
 
 def fig_event_rate(stim_df, stats: Optional[dict] = None, lang: str = "zh") -> Figure:
-    fig, ax = plt.subplots(figsize=(3.2, 3.6))
+    fig, ax = plt.subplots(figsize=(3.5, 3.6), layout="constrained")
     _paired_plot(ax, stim_df.get("pre_rate_per_min", []), stim_df.get("post_rate_per_min", []),
                  lang, tr("rate", lang), tr("rate_title", lang), stats)
-    fig.tight_layout()
     return fig
 
 

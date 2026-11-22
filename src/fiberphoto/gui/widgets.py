@@ -9,8 +9,8 @@ from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PySide6.QtCore import QObject, QRunnable, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-                               QLabel, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout,
+                               QLabel, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
 from ..config import PipelineConfig
 from .texts import ParamSpec
@@ -61,6 +61,7 @@ class ParamForm(QWidget):
         super().__init__(parent)
         self.specs = specs
         self.form = QFormLayout(self)
+        self.form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         self.form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.labels: dict[str, QLabel] = {}
@@ -303,28 +304,43 @@ class FigureView(QWidget):
         self.toolbar = None
         self.placeholder = QLabel(placeholder)
         self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setWordWrap(True)
         self.placeholder.setStyleSheet("color: #8a8984; font-size: 13px;")
         self.lay.addWidget(self.placeholder, 1)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.lay.addWidget(self.scroll, 1)
+        self.scroll.hide()
 
     def set_placeholder(self, text: str):
         self.placeholder.setText(text)
 
     def set_figure(self, fig: Figure | None):
-        for w in (self.toolbar, self.canvas):
-            if w is not None:
-                self.lay.removeWidget(w)
-                w.setParent(None)
-                w.deleteLater()
+        if self.toolbar is not None:
+            self.lay.removeWidget(self.toolbar)
+            self.toolbar.setParent(None)
+            self.toolbar.deleteLater()
+        old = self.scroll.takeWidget()
+        if old is not None:
+            old.deleteLater()
         self.canvas = self.toolbar = None
         if fig is None:
+            self.scroll.hide()
             self.placeholder.show()
             return
         self.placeholder.hide()
         self.canvas = PreviewCanvas(fig)
+        # Keep tick labels, legends and data readable even in a compact splitter pane.
+        # These sizes are Qt logical pixels, independent of the backing display scale.
+        width, height = fig.get_size_inches()
+        self.canvas.setMinimumSize(max(230, round(76 * width)), max(195, round(77 * height)))
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setIconSize(self.toolbar.iconSize() * 0.8)
-        self.lay.addWidget(self.toolbar)
-        self.lay.addWidget(self.canvas, 1)
+        self.lay.insertWidget(0, self.toolbar)
+        self.scroll.setWidget(self.canvas)
+        self.scroll.show()
         self.canvas.draw_idle()
 
 
