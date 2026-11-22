@@ -71,3 +71,15 @@ def test_heatmap_and_trace_recolor_legend_and_preserve_data():
     np.testing.assert_array_equal(heatmap.get_array(), matrix)
     np.testing.assert_array_equal(line.get_ydata(), [2, 3])
     plt.close(fig)
+
+
+def test_category_labels_survive_drawing_and_numeric_ticks_preserve_scale():
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [2, 3])
+    ax.set_xticks([0, 1], ["Baseline", "Response"])
+    apply_figure_edits(fig, {"ax0/xtick1": {"text": "After cue"}, "ax0/yticks": {"color": "#004488", "size": 8}})
+    fig.canvas.draw()
+    assert [t.get_text() for t in ax.get_xticklabels()] == ["Baseline", "After cue"]
+    np.testing.assert_array_equal(ax.get_xticks(), [0, 1])
+    assert all(to_hex(t.get_color()) == "#004488" for t in ax.get_yticklabels())
+    plt.close(fig)

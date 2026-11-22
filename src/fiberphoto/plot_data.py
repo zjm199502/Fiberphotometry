@@ -40,10 +40,15 @@ def capture_views(views):
                 heat = ax.images[0]
                 info.update(cmap=heat.get_cmap().name, clim=heat.get_clim(), extent=heat.get_extent())
             axes[name].append(info)
-        for ext in ("png", "svg"):
-            image = BytesIO()
-            figure.savefig(image, format=ext, dpi=120)
-            images[f"{name}.{ext}"] = image.getvalue()
+        engine = figure.get_layout_engine()
+        figure.set_layout_engine("none")  # keep the captured GUI panel positions at export DPI
+        try:
+            for ext in ("png", "svg"):
+                image = BytesIO()
+                figure.savefig(image, format=ext, dpi=120)
+                images[f"{name}.{ext}"] = image.getvalue()
+        finally:
+            figure.set_layout_engine(engine)
     return axes, images, specs
 
 
@@ -89,8 +94,8 @@ def _peth_tables(archive, p, b, scale, offset):
         base = native_trials[:, baseline]
         metrics["baseline_mean_input_native"] = base.mean(axis=1) if base.shape[1] else np.nan
         metrics["baseline_sd_input_native"] = base.std(axis=1, ddof=1) if base.shape[1] > 1 else np.nan
-    if not len(metrics.columns):
-        metrics = pd.DataFrame(columns=["trial", "onset_s", "peak_latency_s"])
+    if metrics.empty:
+        metrics = metrics.reindex(columns=list(dict.fromkeys(["trial", "onset_s", "peak_latency_s", *metrics])))
     _table(archive, "trial_metrics", metrics)
     comparisons = []
     for kind in ("native", "z", "dff"):

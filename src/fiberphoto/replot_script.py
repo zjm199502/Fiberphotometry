@@ -25,8 +25,8 @@ def replot(folder):
     plotting.setup_style(lang)
 
     def read(name):
-        return pd.read_csv(folder / (name + ".csv"), float_precision="round_trip", keep_default_na=False,
-                           na_values=[""])
+        precision = {"float_precision": "round_trip"} if int(pd.__version__.split(".")[0]) < 3 else {}
+        return pd.read_csv(folder / (name + ".csv"), keep_default_na=False, na_values=[""], **precision)
 
     def save(fig, name, view=None):
         spec = meta["views"].get(view or name, {})

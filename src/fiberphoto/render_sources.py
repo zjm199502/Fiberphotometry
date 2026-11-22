@@ -1,4 +1,5 @@
 """Provide this build's plotting sources to independent plot-data ZIPs."""
+from contextlib import nullcontext
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -22,15 +23,11 @@ def add_renderer(archive, package=PACKAGE):
     # A cumulative patch ships ordinary .py files. Frozen base builds have an asset snapshot.
     from_disk = (package / "replot_script.py").is_file()
     archive.writestr("fiberlume_render/__init__.py", "")
-    if from_disk:
+    with (nullcontext() if from_disk else ZipFile(snapshot_path(package))) as saved:
         for name in FILES:
             dest = "replot.py" if name == "replot_script" else "fiberlume_render/" + name + ".py"
-            archive.write(package / (name + ".py"), dest)
-    else:
-        with ZipFile(snapshot_path(package)) as saved:
-            for name in FILES:
-                dest = "replot.py" if name == "replot_script" else "fiberlume_render/" + name + ".py"
-                archive.writestr(dest, saved.read(name + ".py"))
+            data = saved.read(name + ".py") if saved else (package / (name + ".py")).read_bytes()
+            archive.writestr(dest, data)
 
 
 if __name__ == "__main__":

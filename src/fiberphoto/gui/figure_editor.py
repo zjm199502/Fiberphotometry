@@ -58,7 +58,7 @@ def edit_figure(view, event=None):
     index = 0
     if event is not None:
         # Text is on top of the data. Among data artists, prefer the uppermost visible series.
-        candidates = sorted(enumerate(entries), key=lambda pair: (pair[1].kind == "text",
+        candidates = sorted(enumerate(entries), key=lambda pair: (pair[1].kind in ("text", "category", "ticks"),
                             max(a.get_zorder() for a in pair[1].artists)), reverse=True)
         index = next((i for i, item in candidates
                       if any(a.get_visible() and a.contains(event)[0] for a in item.artists)), 0)

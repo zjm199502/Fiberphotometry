@@ -6,6 +6,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.colors import to_hex
 from matplotlib.container import BarContainer
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FixedFormatter, FixedLocator
 
 
 @dataclass
@@ -14,12 +15,16 @@ class Element:
     name: str
     kind: str
     artists: list
+    axis: object = None
+    position: int = 0
 
     def values(self):
         obj = self.artists[0]
         if self.kind == "image":
             return {"cmap": obj.get_cmap().name}
-        if self.kind == "text":
+        if self.kind == "ticks":
+            return {"size": obj.get_fontsize(), "color": to_hex(obj.get_color())}
+        if self.kind in ("text", "category"):
             return {"text": obj.get_text(), "size": obj.get_fontsize(), "color": to_hex(obj.get_color())}
         if isinstance(obj, Line2D):
             color = obj.get_color()
@@ -32,8 +37,18 @@ class Element:
         return {"color": to_hex(color)}
 
     def apply(self, changes):
+        if self.kind == "ticks":
+            style = {param: changes[key] for key, param in (("size", "labelsize"), ("color", "labelcolor"))
+                     if key in changes}
+            self.axis.set_tick_params(**style)
+            return
+        if self.kind == "category" and "text" in changes:
+            locs = self.axis.get_majorticklocs()
+            labels = self.axis.get_major_formatter().format_ticks(locs)
+            labels[self.position] = changes["text"]
+            self.axis.set_major_formatter(FixedFormatter(labels))
         for obj in self.artists:
-            if self.kind == "text":
+            if self.kind in ("text", "category"):
                 if "text" in changes:
                     obj.set_parse_math(False)
                     obj.set_text(changes["text"])
@@ -42,7 +57,7 @@ class Element:
             if self.kind == "image" and changes.get("cmap") in mpl.colormaps:
                 obj.set_cmap(changes["cmap"])
             if "color" in changes:
-                if self.kind == "text" or isinstance(obj, Line2D):
+                if self.kind in ("text", "category") or isinstance(obj, Line2D):
                     obj.set_color(changes["color"])
                 elif isinstance(obj, LineCollection):
                     obj.set_edgecolor(changes["color"])
@@ -63,6 +78,18 @@ def figure_elements(fig, lang="en"):
                           *((f"text{j}", item) for j, item in enumerate(ax.texts))):
             if obj.get_visible() and obj.get_text():
                 elements.append(Element(prefix + name, panel + obj.get_text(), "text", [obj]))
+        for name, axis in (("x", ax.xaxis), ("y", ax.yaxis)):
+            ticks = axis.get_majorticklabels()
+            if not ticks:
+                continue
+            if isinstance(axis.get_major_locator(), FixedLocator):
+                for j, obj in enumerate(ticks):
+                    if obj.get_visible() and obj.get_text():
+                        elements.append(Element(prefix + f"{name}tick{j}", panel + obj.get_text(),
+                                                "category", [obj], axis, j))
+            else:
+                title = f"{name.upper()} ticks" if en else f"{name.upper()} 轴刻度"
+                elements.append(Element(prefix + name + "ticks", panel + title, "ticks", ticks, axis))
         if getattr(ax, "_colorbar", None) is not None:
             continue
         if ax.get_legend() is not None:
