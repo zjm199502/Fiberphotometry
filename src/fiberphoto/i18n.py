@@ -37,7 +37,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "amplitude": {"zh": "幅度", "en": "Amplitude"},
     "iei_s": {"zh": "间隔 (s)", "en": "Interval (s)"},
     "count": {"zh": "数量", "en": "Count"},
-    "rate_title": {"zh": "刺激前后事件频率", "en": "Event rate before vs after stimulus"},
+    "rate_title": {"zh": "刺激前后事件频率", "en": "Pre/post event rate"},
     "rate": {"zh": "事件频率 (次/分钟)", "en": "Event rate (/min)"},
     "stimulus": {"zh": "刺激", "en": "Stimulus"},
     "summary_title": {"zh": "分析总览", "en": "Analysis summary"},

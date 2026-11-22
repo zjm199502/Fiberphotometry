@@ -11,7 +11,7 @@ import pytest
 
 from matplotlib.legend import Legend
 from matplotlib.transforms import Bbox
-from PySide6.QtCore import QSettings, Qt, QTimer, qVersion
+from PySide6.QtCore import QRect, QSettings, Qt, QTimer, qVersion
 from PySide6.QtWidgets import (QApplication, QDialogButtonBox, QLabel, QMessageBox, QPushButton, QScrollArea,
                                QStyle, QStyleOptionButton, QStyleOptionTab, QTabWidget)
 
@@ -48,9 +48,23 @@ def _reveal(target):
     QApplication.processEvents()
 
 
-def _reachable(button):
+def _reachable(button, layout_root):
     _reveal(button)
-    return button.isVisible() and button.visibleRegion().contains(button.rect().adjusted(1, 1, -1, -1))
+    if layout_root.isWindow():
+        return button.isVisible() and button.visibleRegion().contains(button.rect().adjusted(1, 1, -1, -1))
+    # For a large desktop render, test every clipping parent within that virtual
+    # desktop. The testing monitor's smaller host window is outside the layout.
+    if not button.isVisibleTo(layout_root):
+        return False
+    parent = button.parentWidget()
+    while parent is not None:
+        box = QRect(button.mapTo(parent, button.rect().topLeft()), button.size()).adjusted(1, 1, -1, -1)
+        if not parent.rect().contains(box):
+            return False
+        if parent is layout_root:
+            return True
+        parent = parent.parentWidget()
+    return False
 
 
 def _run_confirmed_preprocessing(window, qapp):
@@ -225,18 +239,34 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
         if compact:
             window.resize(width, height)
         else:
-            # The Windows window manager clamps an ordinary resize to its work
-            # area. Request the exact native surface to render the large desktop
-            # layout; QWidget.grab also captures its part beyond the monitor.
             window.setFixedSize(width, height)
         qtbot.wait(150)
+        host = None
+        if not compact and (width > available.width() or height > available.height()
+                            or (window.width(), window.height()) != (width, height)):
+            # Cocoa can cap even a fixed-size top-level window at the physical
+            # monitor height. A fixed-size child of a native scroll window keeps
+            # the production layout at its actual target dimensions.
+            host = QScrollArea()
+            qtbot.addWidget(host)
+            host.resize(min(width, available.width() - margins.left() - margins.right() - 12),
+                        min(height, available.height() - margins.top() - margins.bottom() - 12))
+            window.hide()
+            window.setParent(host.viewport(), Qt.Widget)
+            host.setWidget(window)
+            window.setFixedSize(width, height)
+            window.show()
+            with qtbot.waitExposed(host):
+                host.show()
+            qtbot.wait(150)
         prefix = f"{backend}-{lang}-{requested[0]}x{requested[1]}"
         report = dict(platform=platform.platform(), qt=qVersion(), backend=backend, language=lang,
                       dpr=window.devicePixelRatioF(), logical_dpi=window.screen().logicalDotsPerInch(),
                       requested=list(requested), available=list(available.getRect()),
                       client=[window.width(), window.height()], frame=list(window.frameGeometry().getRect()),
-                      inside_desktop=available.contains(window.frameGeometry()),
-                      capture="native widget grab", scenario="available desktop" if compact else "large desktop layout",
+                      inside_desktop=host is None and available.contains(window.frameGeometry()),
+                      capture="native scroll host widget grab" if host else "native top-level widget grab",
+                      scenario="available desktop" if compact else "large desktop layout",
                       pages={})
         issues = []
         if (window.width(), window.height()) != (width, height):
@@ -247,7 +277,7 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             window.tabs.setCurrentIndex(index)
             qtbot.wait(80)
             canvases = {}
-            reach = {name: _reachable(getattr(window, name)) for name in buttons}
+            reach = {name: _reachable(getattr(window, name), window) for name in buttons}
             issues.extend(f"{page}/{name}: unreachable" for name, ok in reach.items() if not ok)
             measurements, clipped = _content_geometry(window)
             issues.extend(f"{page}: {error}" for error in clipped)
