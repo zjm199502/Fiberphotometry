@@ -72,10 +72,10 @@ def test_native_dialog_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lang
                 assert label.heightForWidth(label.width()) <= label.height() + 1, label.text()
         if name == "behavior":
             for field in (dialog.time_col, dialog.value_col, dialog.starts, dialog.offset, dialog.method):
-                assert _reachable(field)
+                assert _reachable(field, dialog)
             assert dialog.config().value_column == "speed" and dialog.config().time_unit == "ms"
         elif name == "abet":
-            assert dialog.model.rowCount() == 4 and _reachable(dialog.gap)
+            assert dialog.model.rowCount() == 4 and _reachable(dialog.gap, dialog)
             assert str(window.A.abet.info["aligned_samples"]) in dialog.span.text()
             _reveal(dialog.table)
             for column in (0, dialog.model.columnCount() - 1):
@@ -100,7 +100,7 @@ def test_native_dialog_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lang
             assert bar.value() == bar.maximum()
         for button in dialog.findChildren(QPushButton):
             if button.text() and not button.isHidden():
-                assert _reachable(button), button.text()
+                assert _reachable(button, dialog), button.text()
         report[name] = details
         dialog.reject()
         return QDialog.Rejected

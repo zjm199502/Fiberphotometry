@@ -310,4 +310,9 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
         report["passed"] = not issues
         (artifacts / f"{prefix}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         failures.extend(f"{prefix}: {issue}" for issue in issues)
+        if host is not None:
+            # qtbot owns both widgets for teardown. Disown the main window
+            # before destroying its temporary native scroll area.
+            host.takeWidget()
+            host.close()
     assert not failures, "\n".join(failures)
