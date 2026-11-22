@@ -50,7 +50,14 @@ def test_compact_recording_switch_and_preview(qtbot, window):
     assert w.current == first and w.A is raw and w.read_panels.compact.currentWidget() is w.fig_raw
     w.resize(1400, 900)
     qtbot.waitUntil(w.file_sidebar.isVisible)
-    assert w.read_panels.compact.count() == 0 and w.A is raw
+    assert w.A is raw and w.fig_raw.isVisible()
+
+    # At 1400 × 900 the sidebar fits, but larger platform fonts can still
+    # require separate tabs for the settings and preview. Give both panes
+    # enough height to verify that widening the layout preserves live data.
+    w.setFixedSize(1600, max(1400, 85 * w.fontMetrics().lineSpacing()))
+    qtbot.waitUntil(lambda: w.read_panels.compact.count() == 0)
+    assert w.b_read.isVisible() and w.fig_raw.isVisible() and w.A is raw
 
 
 def test_full_walkthrough(qtbot, window, tmp_path, monkeypatch):
