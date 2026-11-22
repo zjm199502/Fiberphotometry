@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from nptdms import ChannelObject, GroupObject, RootObject, TdmsWriter
 from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QRegion
 from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QTabWidget
 
 from fiberphoto.gui import main_window
@@ -35,20 +36,29 @@ def _ancestors(widget):
         parent = parent.parentWidget()
 
 
-def _show_control(widget):
-    parents = list(_ancestors(widget))
-    for parent in reversed(parents):
-        if isinstance(parent, QTabWidget):
-            for i in range(parent.count()):
-                if parent.widget(i).isAncestorOf(widget):
-                    parent.setCurrentIndex(i)
-                    break
-    QApplication.processEvents()
-    for parent in parents:
-        if isinstance(parent, QScrollArea):
-            parent.ensureWidgetVisible(widget, 2, 2)
-    QApplication.processEvents()
-    assert widget.isVisible() and widget.visibleRegion().contains(widget.rect().adjusted(1, 1, -1, -1))
+def _fully_visible(widget):
+    required = QRegion(widget.rect().adjusted(1, 1, -1, -1))
+    return widget.isVisible() and not required.isEmpty() and required.subtracted(widget.visibleRegion()).isEmpty()
+
+
+def _show_control(qtbot, widget):
+    # Selecting a compact tab can reparent its controls and resize the outer
+    # page on a later LayoutRequest. Scroll against the resulting viewport.
+    def reveal():
+        for parent in reversed(list(_ancestors(widget))):
+            if isinstance(parent, QTabWidget):
+                for i in range(parent.count()):
+                    if parent.widget(i).isAncestorOf(widget):
+                        parent.setCurrentIndex(i)
+                        break
+        QApplication.processEvents()
+        for parent in _ancestors(widget):
+            if isinstance(parent, QScrollArea):
+                parent.ensureWidgetVisible(widget, 2, 2)
+        QApplication.processEvents()
+        return _fully_visible(widget)
+
+    qtbot.waitUntil(reveal, timeout=2000)
 
 
 def _capture(window, name):
@@ -79,7 +89,7 @@ def test_read_settings_layout(qtbot, qapp, tmp_path, monkeypatch, multichannel_r
         qtbot.waitUntil(lambda: window.isVisible() and window.chan_table.rowCount() == 14)
         assert (window.width(), window.height()) == size
         page = window.tabs.widget(0)
-        _show_control(window.b_read)
+        _show_control(qtbot, window.b_read)
         messages = []
         monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
         qtbot.mouseClick(window.b_read, Qt.LeftButton)
@@ -88,12 +98,12 @@ def test_read_settings_layout(qtbot, qapp, tmp_path, monkeypatch, multichannel_r
                       window.b_exclude, window.b_restore, window.b_read):
             # A short window may scroll the page. Mapping controls should never be
             # clipped behind a second vertical scroller inside that page.
-            _show_control(field)
+            _show_control(qtbot, field)
             inner = [area for area in _ancestors(field) if isinstance(area, QScrollArea)
                      and area is not page and area.verticalScrollBar().maximum() > 0]
             assert not inner, f"Nested settings scroller clips {field} at {size} ({lang})"
         prefix = f"{lang}-{size[0]}x{size[1]}"
-        _show_control(window.marker_file)
+        _show_control(qtbot, window.marker_file)
         if os.environ.get("FIBERLUME_READ_LAYOUT_ARTIFACTS"):
             print(prefix, "Qt", qapp.platformName(), "page scroll maximum", page.verticalScrollBar().maximum(),
                   "single settings/preview tab", bool(window.read_panels.compact.count()),
@@ -101,9 +111,9 @@ def test_read_settings_layout(qtbot, qapp, tmp_path, monkeypatch, multichannel_r
             if size[0] >= 1366:
                 assert page.verticalScrollBar().maximum() == 0
         _capture(window, prefix + "-settings")
-        _show_control(window.fs_edit)
+        _show_control(qtbot, window.fs_edit)
         window.fs_edit.spin.setValue(50.0)
-        _show_control(window.b_read)
+        _show_control(qtbot, window.b_read)
         qtbot.mouseClick(window.b_read, Qt.LeftButton)
         qtbot.waitUntil(lambda: not window._busy and (bool(errors) or window.A is not None), timeout=20000)
         assert not errors
@@ -112,10 +122,16 @@ def test_read_settings_layout(qtbot, qapp, tmp_path, monkeypatch, multichannel_r
         assert window.fig_raw.isVisible() and window.fig_raw.scroll.viewport().height() > 60
         # Follow the preprocessing page's user-facing shortcut back to the
         # interval controls after the application has switched to the preview.
-        _show_control(window.b_choose_windows)
+        _show_control(qtbot, window.b_choose_windows)
         qtbot.mouseClick(window.b_choose_windows, Qt.LeftButton)
+        # Allow the compact tab layout and its scroll range to settle. The
+        # shortcut itself must expose the focused control without a test scroll.
+        qtbot.wait(80)
+        signal_pick = window.baseline_picker.signal_button
+        assert window.focusWidget() is signal_pick
+        assert _fully_visible(signal_pick)
         qtbot.waitUntil(window.baseline_picker.button.isVisible)
-        _show_control(window.baseline_picker.button)
+        _show_control(qtbot, window.baseline_picker.button)
         qtbot.mouseClick(window.baseline_picker.button, Qt.LeftButton)
         assert window.baseline_picker.kind == "baseline" and window.fig_raw.canvas.isVisible()
         _capture(window, prefix + "-preview")

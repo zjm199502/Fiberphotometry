@@ -274,6 +274,8 @@ class MainWindow(QMainWindow):
         self.page_help = []
         self.tabs = QTabWidget()
         self.tabs.addTab(_scroll(self._tab_read()), "")
+        self.tabs.widget(0).verticalScrollBar().rangeChanged.connect(
+            self._reveal_read_shortcut, Qt.QueuedConnection)
         self.tabs.addTab(_scroll(self._tab_pre()), "")
         self.tabs.addTab(_scroll(self._tab_peth()), "")
         self.tabs.addTab(_scroll(self._tab_events()), "")
@@ -1461,11 +1463,15 @@ class MainWindow(QMainWindow):
     def _choose_windows(self):
         self.tabs.setCurrentIndex(0)
         self.read_panels.select(0)
-        if self.A is None:
-            self.b_read.setFocus()
-        else:
-            self.tabs.widget(0).ensureWidgetVisible(self.baseline_picker.signal_button)
-            self.baseline_picker.signal_button.setFocus()
+        target = self.b_read if self.A is None else self.baseline_picker.signal_button
+        target.setFocus()
+        self._reveal_read_shortcut()
+
+    def _reveal_read_shortcut(self):
+        # Compact tabs may change the scroll range after focus has moved.
+        target = self.focusWidget()
+        if target in (self.b_read, self.baseline_picker.signal_button) and target.isVisible():
+            self.tabs.widget(0).ensureWidgetVisible(target)
 
     def _confirm_preprocessing(self, raw, cfg):
         names = raw.channel_names
