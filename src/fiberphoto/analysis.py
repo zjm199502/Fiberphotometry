@@ -42,6 +42,29 @@ class PethResult:
     window_config: PethConfig | None = field(default=None, kw_only=True)
     marker_sources: tuple[str, ...] = ()
 
+    def with_display_window(self, b, cfg):
+        """Extend accepted trials for plotting, retaining all samples needed to reproduce statistics."""
+        left, right = cfg.display_bounds_s()
+        if not np.isfinite([left, right]).all() or left > 0 or right < 0 or left == right:
+            raise ValueError("显示时长须为非负数且总长大于零。Display durations must be nonnegative with a positive total.")
+        pre, post = _trial_sample_counts(cfg, b.fs)
+        pre = max(pre, int(np.ceil(-left * b.fs - 1e-9)))
+        post = max(post, int(np.ceil(right * b.fs - 1e-9)))
+        if round(self.t_rel[0] * b.fs) == -pre and round(self.t_rel[-1] * b.fs) == post:
+            return replace(self, window_config=replace(cfg))
+        rel = np.arange(-pre, post + 1) / b.fs
+        dff = np.full((len(self.onsets), len(rel)), np.nan)
+        z = np.full_like(dff, np.nan)
+        for row, (anchor, metric) in enumerate(zip(np.searchsorted(b.time, self.onsets), self.metrics.itertuples())):
+            first = max(0, anchor - pre)
+            last = min(len(b.time), anchor + post + 1)
+            dest = slice(first - anchor + pre, last - anchor + pre)
+            values = b.dff[first:last].astype(float, copy=False)
+            dff[row, dest] = values - metric.prestimulus_mean_input_dff
+            sd = metric.baseline_sd_input_native
+            z[row, dest] = (values - metric.baseline_mean_input_native) / (sd if sd > 0 else 1.)
+        return replace(self, t_rel=rel, trials_dff=dff, trials_z=z, window_config=replace(cfg))
+
     def paired_values(self, metric: str, kind: str):
         target = f"peak_{kind}" if metric == "peak" else f"auc_target_{kind}"
         baseline = f"{metric}_baseline_{kind}"
@@ -85,6 +108,15 @@ def _window_metrics(seg: np.ndarray, base_m, targ_m, dt: float, tag: str, baseli
     }
 
 
+def _trial_sample_counts(cfg, fs):
+    start, end = cfg.trial_bounds_s()
+    if not np.isfinite([start, end]).all() or start > 0 or end < 0:
+        raise ValueError("取窗范围须包含刺激零点。The trial must include stimulus time zero.")
+    pre = int(np.floor(-start * fs + 1e-9)) if cfg.pre_s is None else round(cfg.pre_s * fs)
+    post = int(np.floor(end * fs + 1e-9)) if cfg.post_s is None else round(cfg.post_s * fs)
+    return pre, post
+
+
 def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = "") -> PethResult:
     """Cut data B around each stimulus; report ΔF/F and baseline z-score side by side.
 
@@ -99,14 +131,9 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
     for start, end in ((cfg.baseline_start_s, cfg.baseline_end_s), (cfg.response_start_s, cfg.response_end_s)):
         if not np.isfinite([start, end]).all() or start >= end:
             raise ValueError("基线窗和目标窗的开始时间须早于结束时间。Each window must have a finite start before its end.")
-    start, end = cfg.trial_bounds_s()
-    if not np.isfinite([start, end]).all() or start > 0 or end < 0:
-        raise ValueError("取窗范围须包含刺激零点。The trial must include stimulus time zero.")
-    # Keep sampled times inside the two outer limits. Explicit protocols retain nearest-frame rounding.
-    n_pre = int(np.floor(-start * b.fs + 1e-9)) if cfg.pre_s is None else round(cfg.pre_s * b.fs)
+    n_pre, n_post = _trial_sample_counts(cfg, b.fs)
     if n_pre < 1:
         raise ValueError("刺激前时长须包含至少一个采样点。Increase the pre-stimulus window to include at least one sample.")
-    n_post = int(np.floor(end * b.fs + 1e-9)) if cfg.post_s is None else round(cfg.post_s * b.fs)
     t_rel = np.arange(-n_pre, n_post + 1) / b.fs
     tolerance = 1e-9 / b.fs
     base_m = (t_rel >= cfg.baseline_start_s - tolerance) & (t_rel < cfg.baseline_end_s - tolerance)
@@ -130,21 +157,23 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
         centered = seg - pre_mean
         base = seg[base_m]
         sd = np.std(base, ddof=1) if base.size > 1 else 0.0
-        z = (seg - (base.mean() if base.size else 0.0)) / (sd if sd > 0 else 1.0)
+        base_mean = base.mean() if base.size else 0.0
+        z = (seg - base_mean) / (sd if sd > 0 else 1.0)
         zs.append(z)
         dffs.append(centered)
         used.append(t0)
         baseline_index = _window_extremum(centered[base_m], cfg.peak_direction)
         peak_index = _window_extremum(centered[targ_m], cfg.peak_direction)
         row = {"trial": len(zs), "onset_s": t0, "prestimulus_mean_input_dff": pre_mean,
+               "baseline_mean_input_native": base_mean, "baseline_sd_input_native": sd if base.size > 1 else np.nan,
                "peak_latency_s": float(t_rel[targ_m][peak_index]) if peak_index is not None else np.nan}
         row |= _window_metrics(z, base_m, targ_m, dt, "z", baseline_index, peak_index)
         row |= _window_metrics(centered, base_m, targ_m, dt, "dff", baseline_index, peak_index)
         rows.append(row)
     empty = np.empty((0, t_rel.size))
-    return PethResult(marker, t_rel, np.vstack(zs) if zs else empty, np.vstack(dffs) if dffs else empty,
-                      np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre, cfg.peak_direction,
-                      window_config=replace(cfg))
+    result = PethResult(marker, t_rel, np.vstack(zs) if zs else empty, np.vstack(dffs) if dffs else empty,
+                        np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre, cfg.peak_direction)
+    return result.with_display_window(b, cfg)
 
 
 @dataclass

@@ -160,7 +160,7 @@ def test_peri_event_signed_window_extrema_and_first_latency():
     plt.close(fig)
 
 
-def test_windows_before_zero_set_the_trial_and_figure_extent():
+def test_pre_zero_statistical_windows_and_independent_figure_extent():
     from matplotlib import pyplot as plt
     from fiberphoto.analysis import peri_event
     from fiberphoto.config import PethConfig
@@ -172,20 +172,62 @@ def test_windows_before_zero_set_the_trial_and_figure_extent():
     cfg = PethConfig(baseline_start_s=-3., baseline_end_s=-1., response_start_s=-4.1, response_end_s=-2.)
     p = peri_event(data, [5., 19.75], cfg)
     np.testing.assert_array_equal(p.onsets, [5., 19.75])
-    np.testing.assert_array_equal(p.t_rel, np.arange(-4., 0.25, 0.25))
+    np.testing.assert_array_equal(p.t_rel, np.arange(-5., 10.25, 0.25))
+    assert np.isnan(p.trials_dff[1, p.t_rel > 0]).all()
     np.testing.assert_allclose(p.metrics["peak_latency_s"], -2.)
     np.testing.assert_allclose(p.metrics["baseline_mean_z"], 0, atol=1e-12)
-    np.testing.assert_allclose(p.trials_dff[:, p.t_rel < 0].mean(axis=1), 0, atol=1e-12)
+    np.testing.assert_allclose(p.trials_dff[:, (p.t_rel >= -4) & (p.t_rel < 0)].mean(axis=1), 0, atol=1e-12)
     cfg.response_end_s = 2.  # Editing the form leaves the completed result's axes and shading intact.
     fig = fig_peth(p, "en", cfg_peth=cfg)
     try:
         for axis in fig.axes[:2]:
-            np.testing.assert_allclose(axis.get_xlim(), [-4.1, 0.])
+            np.testing.assert_allclose(axis.get_xlim(), [-5., 10.])
     finally:
         plt.close(fig)
     cfg.baseline_end_s = -3.5
     with pytest.raises(ValueError, match="start before its end"):
         peri_event(data, [5.], cfg)
+
+
+def test_display_limits_preserve_trials_metrics_and_samples():
+    from dataclasses import replace
+    from fiberphoto.analysis import peri_event
+    from fiberphoto.config import PethConfig, PipelineConfig
+    from fiberphoto.data import DffData
+    from fiberphoto.plotting import fig_peth
+    from matplotlib import pyplot as plt
+    import pandas as pd
+
+    t = np.arange(40.)
+    x = np.sin(t).astype(np.float32)
+    x[12] = 25
+    x[0] = np.nan  # outside the baseline of the first accepted event
+    b = DffData(t, x, 1., x, None, "test", "%")
+    cfg = PethConfig(baseline_start_s=-3, baseline_end_s=-1, response_start_s=1, response_end_s=8)
+    old = PipelineConfig.from_dict({"peth": {"trial_window_source": "baseline_and_target",
+            "trial_start_s": -3, "trial_end_s": 8, **{k: getattr(cfg, k) for k in
+            ("baseline_start_s", "baseline_end_s", "response_start_s", "response_end_s")}}}).peth
+    assert old.display_bounds_s() == (-3, 8)
+    ref = peri_event(b, [2., 4., 31., 32.], old)
+    wide_cfg = replace(cfg, display_pre_s=8, display_post_s=14)
+    narrow_cfg = replace(cfg, display_pre_s=1, display_post_s=2)
+    wide = peri_event(b, [2., 4., 31., 32.], wide_cfg)
+    narrow = peri_event(b, [2., 4., 31., 32.], narrow_cfg)
+    live = wide.with_display_window(b, narrow_cfg)
+    for result in (wide, narrow, live):
+        np.testing.assert_equal(result.onsets, [4., 31.])
+        pd.testing.assert_frame_equal(result.metrics, ref.metrics, check_exact=True)
+        used = (result.t_rel >= -3) & (result.t_rel <= 8)
+        np.testing.assert_array_equal(result.trials_dff[:, used], ref.trials_dff)
+        np.testing.assert_array_equal(result.trials_z[:, used], ref.trials_z)
+    assert wide.metrics.peak_latency_s.iloc[0] == 8
+    assert np.isnan(wide.trials_dff[0, wide.t_rel < -4]).all()
+    assert np.isnan(wide.trials_z[1, wide.t_rel > 8]).all()
+    fig = fig_peth(live)
+    try:
+        assert fig.axes[0].get_xlim() == pytest.approx((-1, 2))
+    finally:
+        plt.close(fig)
 
 
 def test_peth_centers_whole_pre_stimulus_segment_separately_from_z_window():

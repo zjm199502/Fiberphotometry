@@ -197,14 +197,15 @@ Deconvolution uses the **de-drifted ΔF/F (data B, before low-pass)**, not the r
 | Parameter | Default | Meaning |
 |---|---|---|
 | Stimulus time | TTL start | Use **TTL end** for shock experiments (see 5.3). |
-| Baseline start / end | −5 s / 0 s | Sets the window for z-scores and baseline AUC. ΔF/F centring uses the full pre-stimulus duration. |
+| Display before / after stimulus | 5 s / 10 s | Sets the horizontal axis of the heatmap and mean trace in the Display tab. |
+| Baseline start / end | −5 s / 0 s | Sets the window for Z-scores, baseline peak and baseline AUC. |
 | Target window start / end | 0 s / 5 s | Window for the target AUC and the peak. |
 | Peak direction | Positive | Select positive for increases and negative for decreases. Both windows and the response latency use this direction. |
 | Merge interval | 0 s | Markers closer than this count as one (removes duplicate markers). |
 
-The epoch covers both windows and stimulus time zero. With the default settings, the heatmap and average trace span −5 to +5 seconds. Change the target end to 8 seconds and rerun the analysis to extend both plots to +8 seconds. All times are relative to the stimulus, in seconds.
+Under **Display**, enter the seconds before and after the stimulus. Press Enter to refresh the current plots. The default display is −5 to +10 seconds. A display ending at +2 seconds still uses the full target window (0 to +5 seconds by default) for peak and AUC. Display changes retain the accepted trials. Extra display samples outside the recording are blank. The methods report and plot bundle record the display and statistical limits separately.
 
-Each **centred ΔF/F** trial is ΔF/F(t) − m, where m is the mean of all pre-stimulus samples (t < 0) in that trial. The sample at stimulus time zero is excluded. The heatmap, average, ΔF/F peak and AUC all use this centred trace in the original data B units. The value subtracted from each trial is recorded in the `prestimulus_mean_input_dff` column of `peth_metrics.csv`. Z-scores use the configured baseline window’s mean and sample standard deviation. AUC uses trapezoidal integration.
+Each **centred ΔF/F** trial is ΔF/F(t) − m. The statistical epoch spans the baseline window, target window and time zero. Its pre-stimulus samples (t < 0) determine m. The heatmap, average, ΔF/F peak and AUC all use this centred trace in the original data B units. The value subtracted from each trial is recorded in the `prestimulus_mean_input_dff` column of `peth_metrics.csv`. Z-scores use the configured baseline window’s mean and sample standard deviation. AUC uses trapezoidal integration.
 
 ### Events
 

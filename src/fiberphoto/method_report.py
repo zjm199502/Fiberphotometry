@@ -8,7 +8,7 @@ import sys
 
 import numpy as np
 
-from .analysis import paired_test
+from .analysis import _trial_sample_counts, paired_test
 from .io_tdms import find_event_file
 from .preprocess import decay_time_constant, format_dff_formula
 from .recordings import recording_family
@@ -208,19 +208,21 @@ def _events(res, cfg):
 def _peth(res, cfg):
     p = res.peth
     cfg = p.window_config or cfg
+    pre, post = _trial_sample_counts(cfg, res.B.fs)
     params = dict(cfg.parameters(), actual_marker=p.marker, input_markers=res.summary.get("n_markers"),
                   accepted_trials=len(p.onsets), dt_s=1/res.B.fs,
-                  dff_centering="subtract_entire_pre_stimulus_mean", pre_samples=int((p.t_rel < 0).sum()),
-                  post_samples=int((p.t_rel > 0).sum()),
-                  sampled_range_s=[p.t_rel[0], p.t_rel[-1]], skipped_nonfinite_pre_trials=p.skipped_incomplete_pre)
+                  dff_centering="subtract_entire_pre_stimulus_mean", pre_samples=pre, post_samples=post,
+                  sampled_range_s=[-pre/res.B.fs, post/res.B.fs], exported_trace_range_s=[p.t_rel[0], p.t_rel[-1]],
+                  skipped_nonfinite_pre_trials=p.skipped_incomplete_pre)
     anchor = ("标记终点（缺失时回退到该脉冲起点）" if cfg.align_to == "offset" else "标记起点")
     rules = [f"刺激零点 = {anchor} + ({cfg.shift_s:g} s)。显式信号区间仅保留区间内的对齐时间。",
              "按时间排序后，距上一个保留标记不足 min_interval_s 的标记丢弃；取 data B 中第一帧 t ≥ 标记时间为零点。",
-             ("取窗从 min(0, 基线开始, 目标开始) 到 max(0, 基线结束, 目标结束)，保留边界内的采样点，绘图使用相同时间范围。"
+             ("统计取窗从 min(0, 基线开始, 目标开始) 到 max(0, 基线结束, 目标结束)，保留边界内的采样点。"
               if cfg.pre_s is None and cfg.post_s is None else
               "程序化协议显式指定的刺激前后时长按 round(时长 × fs) 取帧；其余边界随基线窗和目标窗确定。"),
-             "刺激前至少需一帧，越界或刺激前含非有限值的试次丢弃。",
-             "第 i 试次的 μᵢ = mean(本试次 data B[t < 0])，归零曲线 yᵢ(t) = data Bᵢ(t) − μᵢ，保留 data B 的单位。"
+             "统计取窗的刺激前段至少需一帧。统计取窗越界或其刺激前段含非有限值时剔除该试次。"
+             "热图和平均曲线的显示范围见 display_start_s、display_end_s。单个试次的额外显示段超出记录时留空。",
+             "第 i 试次的 μᵢ = mean(统计取窗内的 data B[t < 0])，归零曲线 yᵢ(t) = data Bᵢ(t) − μᵢ，保留 data B 的单位。"
              "μᵢ 写入 peth_metrics.csv 的 prestimulus_mean_input_dff 列。"]
     if len(p.onsets):
         rules += ["基线窗为 [baseline_start_s, baseline_end_s)，响应窗为 [response_start_s, response_end_s]。"

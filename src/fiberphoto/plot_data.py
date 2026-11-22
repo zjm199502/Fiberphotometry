@@ -89,11 +89,6 @@ def _peth_tables(archive, p, b, scale, offset):
         indices = np.searchsorted(b.time, p.onsets)
         metrics["alignment_sample"] = indices
         metrics["alignment_sample_time_s"] = b.time[indices]
-        baseline = (p.t_rel >= cfg.baseline_start_s - 1e-9 / b.fs) & (p.t_rel < cfg.baseline_end_s - 1e-9 / b.fs)
-        native_trials = p.trials_dff + p.metrics.prestimulus_mean_input_dff.to_numpy()[:, None]
-        base = native_trials[:, baseline]
-        metrics["baseline_mean_input_native"] = base.mean(axis=1) if base.shape[1] else np.nan
-        metrics["baseline_sd_input_native"] = base.std(axis=1, ddof=1) if base.shape[1] > 1 else np.nan
     if metrics.empty:
         metrics = metrics.reindex(columns=list(dict.fromkeys(["trial", "onset_s", "peak_latency_s", *metrics])))
     _table(archive, "trial_metrics", metrics)
@@ -209,7 +204,9 @@ Blank CSV values and JSON null denote undefined quantities. All times are second
 
 刺激锁定 / Peri-event
 trials_native, trials_dff and trials_z have one column per accepted trial and one row per sample relative to its aligned frame.
-native is the displayed input-unit trace minus its full pre-stimulus (t < 0) mean. dff is the same difference in physical ΔF/F (ratio or %).
+The CSV time axis covers the display range and the statistical epoch. Samples outside a recording are blank.
+settings.display_start_s and display_end_s set the figure limits. trial_start_s and trial_end_s delimit the statistical epoch.
+native subtracts the pre-stimulus (t < 0) mean of the statistical epoch in input units. dff expresses this difference in physical ΔF/F (ratio or %).
 z = (input − mean of that trial's baseline window) / sample SD (ddof=1); FiberLume uses divisor 1 when there is no positive SD.
 trial_metrics retains both window peaks and trapezoidal AUC (trace units × seconds), trial centers, zero-based alignment frame and its recording time.
 Baseline uses [start,end); target uses [start,end]. In time_summary, SEM = sample SD / sqrt(finite count); SEM needs at least two trials.

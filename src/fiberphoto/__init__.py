@@ -2,5 +2,5 @@
 from .config import PipelineConfig
 from .pipeline import run_batch, run_file
 
-__version__ = "0.6.8"
+__version__ = "0.6.9"
 __all__ = ["PipelineConfig", "run_file", "run_batch", "__version__"]

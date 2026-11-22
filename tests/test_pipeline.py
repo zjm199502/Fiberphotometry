@@ -96,7 +96,8 @@ def test_peth_shows_response(dataset, tmp_path):
     _, paths = dataset
     res = run_file(paths[0], PipelineConfig(), tmp_path, make_figures=False)
     p = res.peth
-    np.testing.assert_allclose(p.t_rel[[0, -1]], [-5, 5])
+    np.testing.assert_allclose(p.t_rel[[0, -1]], [-5, 10])
+    assert p.window_config.trial_bounds_s() == (-5., 5.)
     assert p.trials.shape[0] == len(truth(paths[0])["stimulus_onsets_s"])
     for kind in ("z", "dff"):
         assert (p.metrics[f"auc_target_{kind}"] > p.metrics[f"auc_baseline_{kind}"]).mean() > 0.9
@@ -134,9 +135,10 @@ def test_outputs_and_backups(dataset, tmp_path):
     assert len(results) == 2 and not any(r.error for r in results)
     out = results[0].out_dir
     for result in results:
-        np.testing.assert_allclose(result.peth.t_rel[[0, -1]], [-4, 3])
+        np.testing.assert_allclose(result.peth.t_rel[[0, -1]], [-20, 10])
         params = json.loads((result.out_dir / "parameters.json").read_text(encoding="utf-8"))["peth"]
         assert (params["trial_start_s"], params["trial_end_s"]) == (-4, 3)
+        assert (params["display_start_s"], params["display_end_s"]) == (-20, 10)
         assert {"pre_s", "post_s"}.isdisjoint(params)
         methods = json.loads((result.out_dir / "analysis_methods.json").read_text(encoding="utf-8"))
         reported = next(s["parameters"] for s in methods["stages"] if s["id"] == "peth")

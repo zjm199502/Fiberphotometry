@@ -90,12 +90,19 @@ class PethConfig:
     min_interval_s: float = 0.0     # merge markers closer than this
     peak_direction: str = "positive"  # positive: window maximum; negative: signed minimum
     include_manual_ttl: bool = False  # add this recording's clicked events to the selected file marker
-
+    display_pre_s: Optional[float] = None
+    display_post_s: Optional[float] = None
 
     def trial_bounds_s(self) -> tuple[float, float]:
         start = min(0., self.baseline_start_s, self.response_start_s) if self.pre_s is None else -self.pre_s
         end = max(0., self.baseline_end_s, self.response_end_s) if self.post_s is None else self.post_s
         return start, end
+
+    def display_bounds_s(self) -> tuple[float, float]:
+        # Existing Python protocols with explicit trial durations keep their original view.
+        left, right = self.trial_bounds_s() if self.pre_s is not None or self.post_s is not None else (-5., 10.)
+        return (left if self.display_pre_s is None else -self.display_pre_s,
+                right if self.display_post_s is None else self.display_post_s)
 
     def parameters(self) -> dict:
         params = asdict(self)
@@ -106,6 +113,7 @@ class PethConfig:
         else:
             params["trial_window_source"] = "explicit_protocol"
         params["trial_start_s"], params["trial_end_s"] = self.trial_bounds_s()
+        params["display_start_s"], params["display_end_s"] = self.display_bounds_s()
         return params
 
 
@@ -186,10 +194,15 @@ class PipelineConfig:
                                   for path, spec in d[f.name].items()}
             elif sub is not None and hasattr(sub, "__dataclass_fields__"):
                 known = {k: v for k, v in d[f.name].items() if k in sub.__dataclass_fields__}
-                # Old GUI profiles saved redundant before/after durations, often at their defaults.
                 if f.name == "peth" and d[f.name].get("trial_window_source") != "explicit_protocol":
-                    known.pop("pre_s", None)
-                    known.pop("post_s", None)
+                    # Up to 0.6.7 the GUI saved pre_s/post_s. 0.6.8 saved its automatic plot limits.
+                    for side, bound, sign in (("pre", "start", -1), ("post", "end", 1)):
+                        old = known.pop(side + "_s", None)
+                        if old is None and d[f.name].get("trial_window_source") == "baseline_and_target":
+                            limit = d[f.name].get("trial_" + bound + "_s")
+                            old = sign * limit if limit is not None else None
+                        if old is not None:
+                            known.setdefault("display_" + side + "_s", old)
                 kwargs[f.name] = type(sub)(**known)
             else:
                 kwargs[f.name] = d[f.name]

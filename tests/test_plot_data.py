@@ -34,6 +34,9 @@ def test_visible_results_export_without_reanalysis(qtbot, tmp_path, monkeypatch)
         assert not errors
     assert window.b_export_peth_plot_data.isEnabled()
     assert window.b_export_event_plot_data.isEnabled()
+    post = window.form_peth.editors["display_post_s"]
+    post.setValue(2.)
+    post.editingFinished.emit()
     p, ev = window.peth, window.events
     window.peth_views.setCurrentIndex(1)
     window.fig_auc.figure_edits["ax0/title-left"] = {"text": "Edited paired AUC", "color": "#246824"}
@@ -64,7 +67,9 @@ def test_visible_results_export_without_reanalysis(qtbot, tmp_path, monkeypatch)
                 np.testing.assert_allclose(read(bundle, "trials_z").iloc[:, 1:].T, p.trials_z)
                 np.testing.assert_allclose(read(bundle, "time_summary").sem_z, p.sem("z"), equal_nan=True)
                 np.testing.assert_allclose(read(bundle, "trial_metrics").peak_dff, p.metrics.peak_dff)
-                assert list(meta["axes"]["peth_z"][0]["xlim"]) == [-5., 5.]
+                assert list(meta["axes"]["peth_z"][0]["xlim"]) == [-5., 2.]
+                assert meta["settings"]["display_end_s"] == 2.
+                assert p.t_rel[-1] == 5.
             else:
                 assert meta["settings"]["spike_threshold"] == .8
                 assert meta["threshold"]["axis"] == "activity"

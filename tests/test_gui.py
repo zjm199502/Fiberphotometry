@@ -70,7 +70,13 @@ def test_full_walkthrough(qtbot, window, tmp_path, monkeypatch):
     assert "ΔF/F 公式" in w.log_view.toPlainText() and "405nm" in w.log_view.toPlainText()
     run(qtbot, w, w.step_peth)
     assert w.peth is not None and w.trial_table.rowCount() == len(w.peth.trials) > 0
-    assert w.fig_peth.canvas.figure.axes[0].get_xlim() == pytest.approx((-5, 5))
+    assert w.fig_peth.canvas.figure.axes[0].get_xlim() == pytest.approx((-5, 10))
+    first = w.peth
+    post = w.form_peth.editors["display_post_s"]
+    post.setValue(1.)
+    post.editingFinished.emit()
+    assert w.peth.metrics is first.metrics and w.peth.onsets is first.onsets
+    assert w.fig_peth.canvas.figure.axes[0].get_xlim() == pytest.approx((-5, 1))
     peak_choice = w.form_peth.editors["peak_direction"]
     peak_choice.setCurrentIndex(peak_choice.findData("negative"))
     w.form_peth.editors["baseline_end_s"].setValue(-1.0)
@@ -78,7 +84,7 @@ def test_full_walkthrough(qtbot, window, tmp_path, monkeypatch):
     run(qtbot, w, w.step_peth)
     assert w.peth.peak_direction == "negative"
     for view in (w.fig_peth, w.fig_peth_dff):
-        assert view.canvas.figure.axes[1].get_xlim() == pytest.approx((-5, 7))
+        assert view.canvas.figure.axes[1].get_xlim() == pytest.approx((-5, 1))
     for tab, unit in [(1, "%"), (0, "z")]:
         w.peth_views.setCurrentIndex(tab)
         auc, peak = w.fig_auc.canvas.figure.axes

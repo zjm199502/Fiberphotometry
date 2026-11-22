@@ -498,7 +498,10 @@ class MainWindow(QMainWindow):
         self.cb_marker_use = QComboBox()
         mrow.addRow(self.lbl_marker_use, self.cb_marker_use)
         bl.addLayout(mrow)
-        self.form_peth = ParamForm(PETH, sections=[("response_start_s", "response_end_s", "peak_direction")])
+        self.form_peth = ParamForm(PETH, sections=[("response_start_s", "response_end_s", "peak_direction"),
+                                                  ("display_pre_s", "display_post_s")])
+        for key in ("display_pre_s", "display_post_s"):
+            self.form_peth.editors[key].editingFinished.connect(self._apply_peth_display)
         bl.addWidget(self.form_peth)
         bl.addStretch()
         self.b_peth = _primary(QPushButton(clicked=self.step_peth))
@@ -518,6 +521,7 @@ class MainWindow(QMainWindow):
         trials_layout.addLayout(trial_actions)
         self.peth_settings = SectionTabs([(timing, ("刺激与基线", "Stimulus and baseline")),
                                          (self.form_peth.sections[0], ("响应", "Response")),
+                                         (self.form_peth.sections[1], ("图形显示", "Display")),
                                          (trials, ("试次", "Trials"))])
         lv.addWidget(self.peth_settings, 1)
         lv.addWidget(self.b_peth)
@@ -831,8 +835,10 @@ class MainWindow(QMainWindow):
 
     def forms_load(self):
         self._load_dedrift()
-        for f in (self.form_deconv, self.form_peth, self.form_events):
+        for f in (self.form_deconv, self.form_events):
             f.load(self.cfg)
+        left, right = self.cfg.peth.display_bounds_s()
+        self.form_peth.load(replace(self.cfg, peth=replace(self.cfg.peth, display_pre_s=-left, display_post_s=right)))
         pc = self.cfg.plot
         for fmt, c in self.chk_fmt.items():
             c.setChecked(fmt in pc.formats)
@@ -1774,6 +1780,33 @@ class MainWindow(QMainWindow):
                   lambda _: self.log(self.t("export_done", path=path)))
 
     # -------------------------------------------------------------- figures
+    def _apply_peth_display(self):
+        p = self.peth
+        if self._busy or self.B is None or p is None or p.window_config is None:
+            return
+        pre = self.form_peth.editors["display_pre_s"].value()
+        post = self.form_peth.editors["display_post_s"].value()
+        if (-pre, post) == p.window_config.display_bounds_s():
+            return
+        try:
+            self.peth = p.with_display_window(self.B, replace(p.window_config, display_pre_s=pre, display_post_s=post))
+        except ValueError as exc:
+            left, right = p.window_config.display_bounds_s()
+            self.form_peth.editors["display_pre_s"].setValue(-left)
+            self.form_peth.editors["display_post_s"].setValue(right)
+            self.error(str(exc))
+            return
+        self.cfg.peth.display_pre_s, self.cfg.peth.display_post_s = pre, post
+        self._draw_peth_traces()
+
+    def _draw_peth_traces(self):
+        for view, kind in ((self.fig_peth, "z"), (self.fig_peth_dff, "dff")):
+            fig = None
+            if self.peth is not None and len(self.peth.trials):
+                fig = plotting.fig_peth(self.peth, self.lang, self.cfg.plot.colormap, kind=kind)
+                plt.close(fig)
+            view.set_figure(fig)
+
     def _bind_figure_edits(self, view, key):
         view.edit_language = self.lang
         edits = self.cfg.figure_edits_by_recording.setdefault(str(self.current.resolve()), {}) if self.current else {}
@@ -1812,11 +1845,7 @@ class MainWindow(QMainWindow):
         else:
             put(self.fig_deconv, None)
             put(self.fig_events, None)
-        ok_peth = self.peth is not None and len(self.peth.trials)
-        put(self.fig_peth, (lambda: plotting.fig_peth(self.peth, lang, cfg.plot.colormap, cfg.peth, "z"))
-            if ok_peth else None)
-        put(self.fig_peth_dff, (lambda: plotting.fig_peth(self.peth, lang, cfg.plot.colormap, cfg.peth, "dff"))
-            if ok_peth else None)
+        self._draw_peth_traces()
         self._draw_peth_comparisons()
         put(self.fig_dist, (lambda: plotting.fig_event_distributions(self.events, lang, self.B.unit))
             if self.events is not None else None)
