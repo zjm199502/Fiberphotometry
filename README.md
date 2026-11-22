@@ -71,6 +71,12 @@ core plus a bilingual (Chinese/English) desktop app for users without programmin
 - ABET 分析采用双脉冲首尾重采样，原始采集帧与分析时间轴可在 HDF5 中核对。
 - 五个分析页面按窗口大小和系统字号调整布局。参数区域和图表可滚动，事件图例排在波形外。
 
+### 检查更新时连接失败
+
+在出现问题的电脑上打开[官方更新清单](https://raw.githubusercontent.com/zjm199502/Fiberphotometry/updates/channel.json)。正常响应含有 `version` 和 `base`。若浏览器能打开清单而应用仍报错，请记录错误原文及发生在检查还是下载阶段，供维护者排查代理、证书或下载中断。
+
+0.6.0–0.6.6 的更新器通过 `raw.githubusercontent.com` 读取清单和补丁。持续无法访问时，可以向维护者索取对应版本的离线更新包，核对校验值并按随包说明安装。0.6.7 的更新器另外支持同一仓库的 `api.github.com` 官方备用地址，两个地址都需要网络连接。
+
 ## 0.6.4 软件内更新
 
 使用 0.6.0–0.6.3 时，打开“帮助 → 检查更新”，下载补丁并重启。

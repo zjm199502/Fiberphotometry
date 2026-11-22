@@ -135,3 +135,27 @@ def test_manual_update_menu(qtbot, monkeypatch):
     manifest.update(version="1.0.1", base="1.0.0", sha256="a" * 64)
     assert updates.check("0.6.0", "0.6.0")[0] == "installer"
     assert updates.check("1.0.0", "1.0.0")[0] == "patch"
+
+
+@pytest.mark.parametrize(("step", "message"), [("check", "读取更新清单失败"), ("stage", "下载补丁失败")])
+def test_update_source_failure_in_menu(qtbot, monkeypatch, step, message):
+    from PySide6.QtWidgets import QMessageBox
+    from fiberphoto.gui.main_window import MainWindow
+    import fiberlume_boot
+
+    window = MainWindow(lang="zh")
+    qtbot.addWidget(window)
+    warnings = []
+    monkeypatch.setattr(fiberlume_boot, "base_version", lambda: "0.6.0")
+    monkeypatch.setattr(QMessageBox, "warning", lambda _, title, text: warnings.append(text))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
+    monkeypatch.setattr(updates, "check", lambda *_: ("patch", {"version": "0.6.9"}))
+
+    def unavailable(*args):
+        raise updates.UpdateSourceError({"raw.githubusercontent.com": "timeout", "api.github.com": "HTTP 403"})
+
+    monkeypatch.setattr(updates, step, unavailable)
+    window.a_update.trigger()
+    qtbot.waitUntil(lambda: bool(warnings))
+    assert message in warnings[0] and "离线更新包" in warnings[0]
+    assert "api.github.com" in window.log_view.toPlainText()

@@ -5,39 +5,139 @@ import json
 import os
 import re
 import shutil
+import socket
 import ssl
 import tempfile
+import time
+from http.client import HTTPException
 from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from zipfile import ZipFile
 
 from fiberlume_boot import compatible, patch_root, version
 
 CHANNEL = "https://raw.githubusercontent.com/zjm199502/Fiberphotometry/updates/"
+CONTENTS_API = "https://api.github.com/repos/zjm199502/Fiberphotometry/contents/"
 RELEASES = "https://github.com/zjm199502/Fiberphotometry/releases/tag/v"
 MAX_SIZE = 32 * 1024 * 1024
 
 
+class UpdateSourceError(OSError):
+    """Safe to display. Details contain only fixed source names and reason categories."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        super().__init__("\n".join(f"{host}: {reason}" for host, reason in failures.items()))
+
+
+class _InvalidResponse(ValueError):
+    """Only constructed with fixed diagnostic text suitable for the GUI."""
+
+
+def _manifest(data):
+    manifest = json.loads(data)
+    if not isinstance(manifest, dict):
+        raise ValueError("Invalid update channel")
+    tag, base = manifest.get("version"), manifest.get("base")
+    if version(base)[2] or (tag != base and not compatible(tag, base)):
+        raise ValueError("Invalid update channel")
+    return manifest
+
+
+def _read_source(request, limit, digest, context):
+    timeout = 12 if digest else 5
+    deadline = time.monotonic() + (60 if digest else 10)
+    with urlopen(request, timeout=timeout, context=context) as response:
+        endpoint = urlsplit(response.geturl())
+        if endpoint.scheme != "https" or endpoint.netloc not in ("raw.githubusercontent.com", "api.github.com"):
+            raise _InvalidResponse("Unexpected redirect")
+        size = response.headers.get("Content-Length")
+        if size is not None and (not size.isdecimal() or int(size) > limit):
+            raise _InvalidResponse("Invalid content length")
+        data = bytearray()
+        while time.monotonic() < deadline:
+            chunk = response.read1(min(65536, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > limit:
+                raise _InvalidResponse("Update exceeds size limit")
+        else:
+            raise TimeoutError
+        if size is not None and len(data) != int(size):
+            raise ConnectionError("Incomplete response")
+    if digest:
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise _InvalidResponse("SHA-256 mismatch")
+    else:
+        try:
+            manifest = _manifest(data)
+            if manifest["version"] != manifest["base"] and not re.fullmatch("[0-9a-f]{64}", str(manifest.get("sha256"))):
+                raise ValueError
+        except (ValueError, RecursionError):
+            raise _InvalidResponse("Invalid update manifest") from None
+    return bytes(data)
+
+
+def _network_failure(exc):
+    if isinstance(exc, HTTPError):
+        exc.close()
+        return f"HTTP {exc.code}", exc.code in (408, 500, 502, 503, 504)
+    if isinstance(exc, URLError):
+        exc = exc.reason
+    if isinstance(exc, ssl.SSLError):
+        return "TLS", False
+    if isinstance(exc, socket.gaierror):
+        return "DNS", True
+    if isinstance(exc, TimeoutError):
+        return "Timeout", True
+    return "Connection failed or interrupted", True
+
+
 def fetch(name, limit):
-    request = Request(CHANNEL + name, headers={"User-Agent": "FiberLume updater", "Cache-Control": "no-cache"})
     import certifi
 
+    digest = None
+    if name != "channel.json":
+        patch = re.fullmatch(r"fiberlume-\d+\.\d+\.\d+-([0-9a-f]{64})\.zip", name)
+        if not patch:
+            raise ValueError("Invalid patch filename")
+        digest = patch[1]
     context = ssl.create_default_context()
     context.load_verify_locations(cafile=certifi.where())
-    with urlopen(request, timeout=30, context=context) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError("Update exceeds size limit")
-    return data
+    headers = {"User-Agent": "FiberLume updater", "Cache-Control": "no-cache"}
+    requests = [Request(CHANNEL + name, headers=headers),
+                Request(CONTENTS_API + name + "?ref=updates", headers={
+                    **headers, "Accept": "application/vnd.github.raw+json"})]
+    failures = {}
+    for attempt in range(2):
+        retry = []
+        for request in requests:
+            try:
+                return _read_source(request, limit, digest, context)
+            except _InvalidResponse as exc:
+                failures[request.host] = str(exc)
+            except ValueError:
+                # urllib can include the proxy configuration in a ValueError.
+                failures[request.host] = "Invalid connection or response"
+            except (OSError, HTTPException) as exc:
+                reason, transient = _network_failure(exc)
+                failures[request.host] = reason
+                if transient:
+                    retry.append(request)
+        if not retry or attempt:
+            break
+        requests = retry
+        time.sleep(0.4)
+    raise UpdateSourceError(failures)
 
 
 def check(current, base):
-    manifest = json.loads(fetch("channel.json", 32768))
+    manifest = _manifest(fetch("channel.json", 32768))
     tag, target_base = manifest["version"], manifest["base"]
-    current_version, target_version = version(current), version(tag)
-    if version(target_base)[2] or (tag != target_base and not compatible(tag, target_base)):
-        raise ValueError("Invalid update channel")
-    if target_version <= current_version:
+    if version(tag) <= version(current):
         return "current", manifest
     if base != target_base or tag == target_base:
         return "installer", manifest

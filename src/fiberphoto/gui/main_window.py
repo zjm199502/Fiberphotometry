@@ -1849,6 +1849,26 @@ class MainWindow(QMainWindow):
         zh = self.lang == "zh"
         title = self.a_update.text().rstrip("…")
 
+        def run_request(action, success, operation):
+            def attempt():
+                try:
+                    return action(), None
+                except updates.UpdateSourceError as exc:
+                    return None, str(exc)
+
+            def finish(result):
+                value, failure = result
+                if failure is None:
+                    success(value)
+                    return
+                hint = ("请检查网络或系统代理后重试。也可以向软件提供方索取离线更新包。"
+                        if zh else "Check your network or system proxy and try again. "
+                                   "You can also request an offline update from your software provider.")
+                self.log(f"{operation} · {failure}")
+                QMessageBox.warning(self, title, f"{operation}\n{failure}\n\n{hint}")
+
+            self._run(attempt, finish)
+
         def checked(result):
             kind, manifest = result
             tag = manifest["version"]
@@ -1864,7 +1884,8 @@ class MainWindow(QMainWindow):
                 return
             prompt = "下载并应用补丁？下次启动生效。" if zh else "Download and apply the patch on the next launch?"
             if QMessageBox.question(self, title, detail + "\n" + prompt) == QMessageBox.Yes:
-                self._run(lambda: updates.stage(manifest, __version__, base), installed)
+                run_request(lambda: updates.stage(manifest, __version__, base), installed,
+                            "下载补丁失败" if zh else "Patch download failed")
 
         def installed(tag):
             import os
@@ -1880,7 +1901,8 @@ class MainWindow(QMainWindow):
                     return
                 self.close()
 
-        self._run(lambda: updates.check(__version__, base), checked)
+        run_request(lambda: updates.check(__version__, base), checked,
+                    "读取更新清单失败" if zh else "Could not read the update manifest")
 
     def show_about(self):
         QMessageBox.about(self, self.t("act_about"), self.t("about_text", ver=__version__))
