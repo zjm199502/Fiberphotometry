@@ -36,6 +36,31 @@ class RawData:
     behavior_info: dict = field(default_factory=dict)
     behavior_native: dict[str, np.ndarray] = field(default_factory=dict)  # mapped timestamps and original values
 
+    manual_ttl_label: str = ""  # name of the manually annotated point series in markers
+
+    def with_manual_ttl(self, times):
+        markers = dict(self.markers)
+        if self.manual_ttl_label:
+            markers.pop(self.manual_ttl_label, None)
+        label = ""
+        if len(times):
+            points = np.asarray(times, dtype=float)
+            if points.ndim != 1 or not np.isfinite(points).all():
+                raise ValueError("手动 TTL 须为有限时间点 / Manual TTLs must be finite timestamps")
+            label = "Manual TTL"
+            suffix = 2
+            while label in markers:
+                label = f"Manual TTL ({suffix})"
+                suffix += 1
+            # A changed sampling-rate override can shorten the clock. Only attach
+            # annotations inside it; the config retains all points for later reads.
+            in_range = points[(points >= self.time[0]) & (points <= self.time[-1])]
+            if len(in_range):
+                markers[label] = np.unique(in_range)
+            else:
+                label = ""
+        return dataclasses.replace(self, markers=markers, manual_ttl_label=label)
+
     def behavior_on(self, time):
         if self.behavior is None or time is self.time or np.array_equal(time, self.time):
             return self.behavior

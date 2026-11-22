@@ -5,7 +5,6 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 from scipy import optimize, signal as sps
 
 from .config import DeconvConfig, DedriftConfig
@@ -130,20 +129,6 @@ def signal_interval_baseline(raw: RawData, start: float, end: float) -> tuple[fl
 
 def dedrift(raw: RawData, cfg: DedriftConfig) -> DffData:
     result = _dedrift_fluorescence(raw, cfg)
-    window = cfg.center_window_s
-    if not np.isfinite(window) or window < 0:
-        raise ValueError("ΔF/F 滑动窗口须为有限的非负秒数 / The ΔF/F centering window must be finite and nonnegative")
-    if window > 0:
-        if len(result.time) < 3 or window * result.fs < 2 - 1e-9:
-            raise ValueError("ΔF/F 滑动窗口过短：需要至少三个采样点 / The ΔF/F centering window needs at least three samples")
-        clock = pd.to_timedelta(result.time - result.time[0], unit="s")
-        trace = pd.Series(result.dff, index=clock)
-        drift = trace.rolling(pd.Timedelta(seconds=window), center=True, closed="both", min_periods=1).median()
-        result.dff_center_baseline = drift.to_numpy()
-        result.dff = result.dff - result.dff_center_baseline
-        if result.dff_unfiltered is not None:
-            result.dff_unfiltered = result.dff_unfiltered - result.dff_center_baseline
-        result.formula_info["center_window_s"] = window
     if cfg.output == "zscore" and result.unit == "%":
         centre, scale = np.median(result.dff), (np.std(result.dff) or 1.0)
         result.formula_info.update(centre=centre, scale=scale)

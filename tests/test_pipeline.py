@@ -101,6 +101,17 @@ def test_peth_shows_response(dataset, tmp_path):
         assert (p.metrics[f"auc_target_{kind}"] > p.metrics[f"auc_baseline_{kind}"]).mean() > 0.9
     assert p.trials_dff.shape == p.trials_z.shape
     import pandas as pd
+    stats = pd.read_csv(res.out_dir / "peth_paired_stats.csv").set_index(["metric", "trace"])
+    assert stats.loc[("peak", "dff"), "peak_direction"] == "positive"
+    assert stats.loc[("peak", "dff"), "unit"] == res.B.unit
+    assert stats.loc[("auc", "dff"), "unit"] == res.B.unit + "·s"
+    from fiberphoto.analysis import paired_test
+    for kind in ("z", "dff"):
+        pre, post = p.paired_values("peak", kind)
+        calculated = paired_test(pre, post)
+        assert stats.loc[("peak", kind), "n"] == calculated["n"]
+        np.testing.assert_allclose(stats.loc[("peak", kind), "wilcoxon_p"], calculated["wilcoxon_p"])
+        np.testing.assert_allclose(stats.loc[("peak", kind), "ttest_p"], calculated["ttest_p"])
     exported = pd.read_csv(res.out_dir / "peth_trials_dff.csv")
     trial_cols = [c for c in exported if c.startswith("trial_")]
     np.testing.assert_allclose(exported[trial_cols].to_numpy().T, p.trials_dff, atol=1e-14)
@@ -122,7 +133,8 @@ def test_outputs_and_backups(dataset, tmp_path):
     out = results[0].out_dir
     for f in ["summary.json", "parameters.json", "events.csv", "peth_metrics.csv",
               "peth_trials_z.csv", "peth_trials_dff.csv", f"{out.name}_dataB.csv",
-              "figures/04_peth_heatmap_z.png", "figures/04_peth_heatmap_dff.png", "figures/05_auc_baseline_target.png"]:
+              "figures/04_peth_heatmap_z.png", "figures/04_peth_heatmap_dff.png", "figures/05_auc_baseline_target.png",
+              "figures/05_peak_baseline_target.png", "peth_paired_stats.csv"]:
         assert (out / f).exists(), f
     assert (tmp_path / "batch_summary.csv").exists()
     h5 = out / f"{out.name}.h5"

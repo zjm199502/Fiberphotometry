@@ -30,6 +30,8 @@ STRINGS: dict[str, dict[str, str]] = {
     "pre": {"zh": "刺激前", "en": "Pre"},
     "post": {"zh": "刺激后", "en": "Post"},
     "auc": {"zh": "AUC", "en": "AUC"},
+    "peak_positive": {"zh": "正峰（最大值）", "en": "Positive peak (max)"},
+    "peak_negative": {"zh": "负峰（最小值）", "en": "Negative peak (min)"},
     "amp_hist": {"zh": "事件幅度分布", "en": "Event amplitude"},
     "iei_hist": {"zh": "事件间隔分布", "en": "Inter-event interval"},
     "amplitude": {"zh": "幅度", "en": "Amplitude"},

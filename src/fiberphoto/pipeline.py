@@ -87,7 +87,10 @@ def attach_behavior(raw: RawData, spec: BehaviorConfig | None) -> RawData:
 
 def read_with_behavior(path: str | Path, cfg: PipelineConfig) -> RawData:
     raw = read_recording(path, cfg.channels)
-    spec = cfg.behavior_by_recording.get(str(Path(path).resolve()))
+    key = str(Path(path).resolve())
+    if cfg.manual_ttl_by_recording.get(key):
+        raw = raw.with_manual_ttl(cfg.manual_ttl_by_recording[key])
+    spec = cfg.behavior_by_recording.get(key)
     return attach_behavior(raw, spec) if spec is not None else raw
 
 
@@ -164,12 +167,26 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
             if len(p.metrics):
                 summary["peth_n_trials"] = len(p.trials)
                 summary["peth_latency_mean_s"] = float(p.metrics["peak_latency_s"].mean())
-                for kind in ("z", "dff"):
-                    st = plotting.auc_stats(p, kind)
-                    summary |= {f"peak_{kind}_mean": float(p.metrics[f"peak_{kind}"].mean()),
-                                f"auc_baseline_{kind}_mean": float(p.metrics[f"auc_baseline_{kind}"].mean()),
-                                f"auc_target_{kind}_mean": float(p.metrics[f"auc_target_{kind}"].mean()),
-                                f"auc_{kind}_wilcoxon_p": st.get("wilcoxon_p", np.nan)}
+            summary["peth_peak_direction"] = p.peak_direction
+            comparisons = []
+            for kind in ("z", "dff"):
+                for metric in ("auc", "peak"):
+                    pre, post = p.paired_values(metric, kind)
+                    valid = np.isfinite(pre) & np.isfinite(post)
+                    stats = analysis.paired_test(pre, post)
+                    baseline = float(pre[valid].mean()) if valid.any() else np.nan
+                    target = float(post[valid].mean()) if valid.any() else np.nan
+                    trace_unit = "z" if kind == "z" else b.unit
+                    comparisons.append({"metric": metric, "trace": kind,
+                                        "unit": f"{trace_unit}·s" if metric == "auc" else trace_unit,
+                                        "peak_direction": p.peak_direction if metric == "peak" else "",
+                                        "baseline_mean": baseline, "target_mean": target, **stats})
+                    summary[f"{metric}_baseline_{kind}_mean"] = baseline
+                    summary[f"{metric}_target_{kind}_mean"] = target
+                    summary[f"{metric}_{kind}_wilcoxon_p"] = stats["wilcoxon_p"]
+                    if metric == "peak":
+                        summary[f"peak_{kind}_mean"] = target
+            pd.DataFrame(comparisons).to_csv(out / "peth_paired_stats.csv", index=False, float_format="%.17g")
         else:
             log(tr("log_no_marker", lang))
         progress(0.7)
@@ -179,7 +196,7 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
             ev = analysis.detect_events(res.C, b, cfg.events)
             res.events = ev
             log(tr("log_events", lang, n=ev.summary["n_events"], rate=ev.summary["rate_per_min"]))
-            ev.events.to_csv(out / "events.csv", index=False, float_format="%.6g")
+            ev.to_csv(out / "events.csv", b.unit)
             summary |= {f"events_{k}": v for k, v in ev.summary.items()}
             if marker:
                 sdf = analysis.events_around_stimuli(ev, onsets, cfg.events.compare_window_s,
@@ -202,14 +219,28 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         recording_channels = replace(cfg.channels, excluded_channels={key: exclusions[key]} if key in exclusions else {})
         windows = cfg.intervals_by_recording
         recording_cfg = replace(cfg, channels=recording_channels, behavior_by_recording=recording_behavior,
-                                intervals_by_recording={key: windows[key]} if key in windows else {})
+                                intervals_by_recording={key: windows[key]} if key in windows else {},
+                                manual_ttl_by_recording={key: cfg.manual_ttl_by_recording[key]}
+                                if key in cfg.manual_ttl_by_recording else {})
         recording_cfg.save(out / "parameters.json")
 
         if make_figures:
             res.figures = export_figures(res, cfg)
             log(tr("log_figs", lang, path=out / "figures"))
+        from .marker_exports import archive_superseded, superseded_manual_outputs
         from .method_report import write_method_report
-        write_method_report(res, recording_cfg.for_recording(path))
+        stale = superseded_manual_outputs(res, recording_cfg)
+        report_path = out / "analysis_methods.json"
+        previous = report_path.read_bytes() if stale else None
+        try:
+            write_method_report(res, recording_cfg.for_recording(path))
+            if stale:
+                archive = archive_superseded(out, stale)
+                log(f"已归档旧手动 TTL 结果 / Previous manual TTL outputs archived: {archive}")
+        except OSError:
+            if previous is not None:
+                report_path.write_bytes(previous)  # Retain provenance for a retry after a locked file.
+            raise
         progress(1.0)
         log(tr("log_done", lang, name=path.name))
     except Exception as e:  # keep batch runs going; report per file
@@ -238,6 +269,7 @@ def export_figures(res: SessionResult, cfg: PipelineConfig) -> list[Path]:
         save(plotting.fig_peth(res.peth, lang, pc.colormap, cfg.peth, "z"), "04_peth_heatmap_z")
         save(plotting.fig_peth(res.peth, lang, pc.colormap, cfg.peth, "dff"), "04_peth_heatmap_dff")
         save(plotting.fig_auc(res.peth, lang), "05_auc_baseline_target")
+        save(plotting.fig_peth_comparisons(res.peth, lang, metric="peak"), "05_peak_baseline_target")
     if res.stim_events is not None and len(res.stim_events):
         stats = analysis.paired_test(res.stim_events["pre_rate_per_min"],
                                      res.stim_events["post_rate_per_min"])

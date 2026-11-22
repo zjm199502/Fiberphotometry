@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWid
                                QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-                               QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+                               QSpinBox, QSplitter, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
 
 from .. import __version__, analysis, plotting
@@ -26,6 +26,7 @@ from ..io_tdms import auto_map, find_event_file, inspect_tdms, is_event_file
 from ..recordings import device_traces
 from ..pipeline import attach_behavior, pick_marker, read_with_behavior, run_batch, run_file
 from .behavior import BehaviorDialog
+from .event_table import EventTableModel
 from .baseline import BaselinePicker
 from ..preprocess import (DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula,
                           signal_interval_baseline)
@@ -112,7 +113,7 @@ class MainWindow(QMainWindow):
         # File-specific association maps are shared by the open session. Snapshot
         # just this view's settings; large analysis arrays are retained by reference.
         local = replace(cfg, channels=replace(cfg.channels, excluded_channels={}),
-                        behavior_by_recording={}, intervals_by_recording={})
+                        behavior_by_recording={}, intervals_by_recording={}, manual_ttl_by_recording={})
         self.recording_states[self.current] = RecordingViewState(
             deepcopy(local), (self.A, self.B, self.C, self.peth, self.events, self.stim_events),
             self.channel_infos, self.previews, self.tabs.currentIndex(),
@@ -122,7 +123,8 @@ class MainWindow(QMainWindow):
         channels = replace(local.channels, excluded_channels=self.cfg.channels.excluded_channels)
         return replace(local, channels=channels, plot=self.cfg.plot, save_csv=self.cfg.save_csv,
                        behavior_by_recording=self.cfg.behavior_by_recording,
-                       intervals_by_recording=self.cfg.intervals_by_recording)
+                       intervals_by_recording=self.cfg.intervals_by_recording,
+                       manual_ttl_by_recording=self.cfg.manual_ttl_by_recording)
 
     def _restore_recording(self, state):
         self.cfg = self._view_config(state.config)
@@ -390,6 +392,7 @@ class MainWindow(QMainWindow):
         self.peth_views = QTabWidget()
         self.peth_views.addTab(self.fig_peth, "")
         self.peth_views.addTab(self.fig_peth_dff, "")
+        self.peth_views.currentChanged.connect(self._draw_peth_comparisons)
         right = QSplitter(Qt.Horizontal)
         right.addWidget(self.peth_views)
         right.addWidget(self.fig_auc)
@@ -417,7 +420,16 @@ class MainWindow(QMainWindow):
         lv.addWidget(self.box_events)
         lv.addWidget(self.b_events)
         lv.addWidget(self.lbl_events)
-        lv.addStretch(1)
+        self.event_table = QTableView()
+        self.event_model = EventTableModel(self.event_table)
+        self.event_table.setModel(self.event_model)
+        self.event_table.setAlternatingRowColors(True)
+        self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.event_table.horizontalHeader().setResizeContentsPrecision(0)
+        self.event_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        lv.addWidget(self.event_table, 1)
+        self.b_export_events = QPushButton(clicked=self.export_event_table)
+        lv.addWidget(self.b_export_events)
 
         self.fig_events = FigureView()
         self.fig_dist = FigureView()
@@ -590,6 +602,7 @@ class MainWindow(QMainWindow):
         # tab 4
         self.box_events.setTitle(t("grp_events"))
         self.b_events.setText(t("btn_events"))
+        self.b_export_events.setText(t("export_event_table"))
         self._show_event_summary()
         # tab 5
         self.box_out.setTitle(t("grp_out"))
@@ -612,12 +625,15 @@ class MainWindow(QMainWindow):
         form = self.form_dedrift
         key = "prefer_plexon_dff"
         interval = form.editors["method"].currentData() == "signal_interval"
-        direct = self.A is not None and self.A.exported_dff is not None and form.editors[key].isChecked() and not interval
-        form.editors[key].setEnabled(not interval)
+        # Only the Plexon reader populates exported_dff, for the selected signal's matched R column.
+        available = self.A is not None and self.A.exported_dff is not None and not interval
+        form.editors[key].setEnabled(available)
+        form.labels[key].setEnabled(available)
+        direct = available and form.editors[key].isChecked()
         for name, editor in form.editors.items():
             if name == key:
                 continue
-            visible = not direct or name in ("signal_start_s", "signal_end_s", "center_window_s")
+            visible = not direct or name in ("signal_start_s", "signal_end_s")
             if name in ("baseline_start_s", "baseline_end_s"):
                 visible = interval
             elif name == "auto_trim" and interval:
@@ -1039,6 +1055,53 @@ class MainWindow(QMainWindow):
         else:
             self._run(lambda: attach_behavior(raw, spec), apply)
 
+    def edit_manual_ttl(self, timestamp=None):
+        """Append a clicked frame, or undo the latest click in this recording."""
+        if self.A is None or self._busy:
+            return
+        key = str(self.current.resolve())
+        points = self.cfg.manual_ttl_by_recording.get(key, [])
+        if timestamp is None:
+            if not points:
+                return
+            points = points[:-1]
+        else:
+            if timestamp in points:
+                return
+            points = [*points, timestamp]
+        old_label = self.A.manual_ttl_label
+        selected = self.cb_marker_use.currentText()
+        self.A = self.A.with_manual_ttl(points)
+        if points:
+            self.cfg.manual_ttl_by_recording[key] = points
+        else:
+            self.cfg.manual_ttl_by_recording.pop(key, None)
+        self.cfg.peth.marker = selected
+        self._refresh_marker_choices()
+        self.cfg.peth.marker = self.cb_marker_use.currentText()
+        peth_changed = self.peth is not None and self.peth.marker == old_label
+        comparison_changed = self.stim_events is not None and self.stim_events.attrs.get("marker") == old_label
+        if peth_changed:
+            self.peth = None
+            self._fill_trial_table()
+            for view in (self.fig_peth, self.fig_peth_dff, self.fig_auc):
+                view.set_figure(None)
+        if comparison_changed:
+            self.stim_events = None
+            self.fig_rate.set_figure(None)
+        plotting.update_manual_ttl_overlay(self.fig_raw.canvas.figure.axes, self.A)
+        self.fig_raw.canvas.draw_idle()
+        overlays_changed = (selected == old_label or self.cfg.peth.marker == self.A.manual_ttl_label)
+        if self.B is not None and overlays_changed:
+            _, times = pick_marker(self.A, self.cfg.peth.marker, self.cfg.peth.align_to, self.cfg.peth.shift_s, processed=self.B)
+            for view, axis in ((self.fig_dedrift, 1), (self.fig_deconv, 0), (self.fig_events, 0)):
+                if view.canvas is not None:
+                    plotting.set_stimulus_lines(view.canvas.figure.axes[axis], times)
+                    view.canvas.draw_idle()
+        self._show_markers_found()
+        self.baseline_picker.refresh()
+        self._update_clear_buttons()
+
     def pick_marker_file(self):
         path, _ = QFileDialog.getOpenFileName(self, self.t("lbl_marker_file"), "", self.t("table_filter"))
         if path:
@@ -1191,8 +1254,6 @@ class MainWindow(QMainWindow):
             source = self.t("pre_ratio_source", column=names["exported_dff"])
         else:
             source = self.t("pre_raw_source", column=signal, method=method)
-        if cfg.dedrift.center_window_s > 0:
-            source += "\n    " + self.t("pre_center_source", window=cfg.dedrift.center_window_s)
         if names.get("control_role") == "baseline" and method != "signal_interval":
             control = self.t("pre_device_baseline", column=control)
         message = self.t("pre_confirm_data", file=raw.source, group=names.get("group") or self.t("none"),
@@ -1264,6 +1325,8 @@ class MainWindow(QMainWindow):
             ev = analysis.detect_events(c, b, cfg.events)
             sdf = (analysis.events_around_stimuli(ev, onsets, cfg.events.compare_window_s, b.time[0], b.time[-1])
                    if marker else None)
+            if sdf is not None:
+                sdf.attrs["marker"] = marker
             return ev, sdf
 
         def done(out):
@@ -1283,19 +1346,29 @@ class MainWindow(QMainWindow):
             if cur in self.A.markers:
                 self.cb_marker_use.setCurrentText(cur)
 
+    def _draw_peth_comparisons(self):
+        if self.peth is None or not len(self.peth.trials):
+            self.fig_auc.set_figure(None)
+            return
+        kind = "z" if self.peth_views.currentIndex() == 0 else "dff"
+        fig = plotting.fig_peth_comparisons(self.peth, self.lang, kind=kind)
+        plt.close(fig)
+        fig.set_layout_engine("tight")
+        self.fig_auc.set_figure(fig)
+
     def _fill_trial_table(self):
         m = self.peth.metrics if self.peth is not None else None
         if m is None or not len(m):
             self.trial_table.setRowCount(0)
             return
-        cols = ["trial", "onset_s", "peak_latency_s", "peak_z", "auc_baseline_z", "auc_target_z",
-                "peak_dff", "auc_baseline_dff", "auc_target_dff"]
-        heads = ["col_trial", "col_onset", "col_latency", "col_peak_z", "col_aucb_z", "col_auct_z",
-                 "col_peak_dff", "col_aucb_dff", "col_auct_dff"]
+        cols = ["trial", "onset_s", "peak_latency_s", "peak_baseline_z", "peak_z", "auc_baseline_z", "auc_target_z",
+                "peak_baseline_dff", "peak_dff", "auc_baseline_dff", "auc_target_dff"]
+        heads = ["col_trial", "col_onset", "col_latency", "col_peak_baseline_z", "col_peak_z", "col_aucb_z", "col_auct_z",
+                 "col_peak_baseline_dff", "col_peak_dff", "col_aucb_dff", "col_auct_dff"]
         self.trial_table.setColumnCount(len(cols))
         self.trial_table.setHorizontalHeaderLabels([self.t(h) for h in heads])
         self.trial_table.setRowCount(len(m))
-        for r, row in enumerate(m[cols].itertuples(index=False)):
+        for r, row in enumerate(m.reindex(columns=cols).itertuples(index=False)):
             for c, v in enumerate(row):
                 txt = str(int(v)) if c == 0 else f"{v:.3g}"
                 it = QTableWidgetItem(txt)
@@ -1304,12 +1377,28 @@ class MainWindow(QMainWindow):
         self.trial_table.resizeColumnsToContents()
 
     def _show_event_summary(self):
+        unit = self.B.unit if self.B is not None else ""
+        self.event_model.set_result(self.events.events if self.events is not None else None, unit, self.lang)
+        self.b_export_events.setEnabled(self.events is not None and not self._busy)
         if self.events is None:
             self.lbl_events.setText("")
             return
         s = self.events.summary
         self.lbl_events.setText(self.t("event_summary", n=s["n_events"], rate=s["rate_per_min"],
                                        amp=s["mean_amplitude"] if s["n_events"] else 0.0, sigma=s["noise_sigma"]))
+
+    def export_event_table(self):
+        if self.events is None or self.B is None or self.current is None or self._busy:
+            return
+        name = self.current.with_name(f"{self.current.stem}_events.csv")
+        path, _ = QFileDialog.getSaveFileName(self, self.t("export_event_table"), str(name), "CSV (*.csv)")
+        if path:
+            try:
+                self.events.to_csv(path, self.B.unit)
+            except OSError as exc:
+                self.error(str(exc))
+                return
+            self.log(self.t("export_done", path=path))
 
     # -------------------------------------------------------------- figures
     def redraw_all(self):
@@ -1346,7 +1435,7 @@ class MainWindow(QMainWindow):
             if ok_peth else None)
         put(self.fig_peth_dff, (lambda: plotting.fig_peth(self.peth, lang, cfg.plot.colormap, cfg.peth, "dff"))
             if ok_peth else None)
-        put(self.fig_auc, (lambda: plotting.fig_auc(self.peth, lang, vertical=True)) if ok_peth else None)
+        self._draw_peth_comparisons()
         put(self.fig_dist, (lambda: plotting.fig_event_distributions(self.events, lang, self.B.unit))
             if self.events is not None else None)
         ok_rate = self.stim_events is not None and len(self.stim_events)
@@ -1444,6 +1533,7 @@ class MainWindow(QMainWindow):
         for b in (self.b_read, self.b_pre, self.b_peth, self.b_events, self.b_export, self.b_batch):
             b.setEnabled(has and not self._busy)
         self.b_remove.setEnabled(has and not self._busy)
+        self.b_export_events.setEnabled(self.events is not None and not self._busy)
         self.b_cancel.setEnabled(self._busy)
         self.baseline_picker.refresh()
         self._update_clear_buttons()
@@ -1562,8 +1652,7 @@ def _deconv_only(c, b, onsets, lang):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
     plotting.plot_trace(ax1, b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
     plotting.plot_trace(ax1, c.time, c.denoised, color=plotting.C_DENOISED, lw=1.0, label=tr("denoised", lang))
-    for t0 in onsets:
-        ax1.axvline(t0, color=plotting.C_STIM, lw=0.8, alpha=0.5)
+    plotting.set_stimulus_lines(ax1, onsets)
     ax1.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax1.legend(loc="upper right", ncol=2)
     plotting.plot_trace(ax2, c.time, c.spikes, spikes=True, color=plotting.INK_2, lw=0.6)

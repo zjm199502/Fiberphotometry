@@ -70,13 +70,17 @@ def _reader(raw, cfg):
             refs.append("NumPy · interp")
     marker_file = cfg.channels.marker_file or (find_event_file(path) if family == ".tdms" else None)
     rules = [clock]
-    if raw.markers:
+    if any(label != raw.manual_ttl_label for label in raw.markers):
         rules.append("标记来源按读取配置解析。记录中的采样 TTL 以 x > 阈值的上升沿/下降沿定时，自动阈值为 (min + max)/2；时间戳表直接读取事件时间。")
     params = {"format": family, "channels": channels, "indicator": raw.indicator,
               "indicator_source": raw.indicator_source, "samples": len(raw.time), "sampling_hz": raw.fs,
               "time_range_s": [raw.time[0], raw.time[-1]], "marker_counts": {k: len(v) for k, v in raw.markers.items()},
               "marker_file": str(marker_file) if marker_file else None,
               "excluded_channels": sorted(cfg.channels.exclusions_for(path))}
+    if raw.manual_ttl_label:
+        params["manual_ttl"] = {"label": raw.manual_ttl_label, "onsets_s": raw.markers[raw.manual_ttl_label]}
+        rules.append("手动 TTL 由用户在原始预览图点击，时间吸附到最近采集帧并按秒保存。只纳入记录覆盖范围内的时间点。"
+                     "每个点只有起始时刻，按终点对齐时沿用起始时刻。")
     return _stage("read", "读取与通道", "recordings.read_recording / io_tdms.read_tdms", params, rules, refs)
 
 
@@ -162,7 +166,8 @@ def _deconv(res, cfg):
 
 def _events(res, cfg):
     ev = res.events
-    params = dict(method=ev.method, actual_threshold=ev.threshold, noise_sigma=ev.noise_sigma, summary=ev.summary)
+    params = dict(method=ev.method, actual_threshold=ev.threshold, noise_sigma=ev.noise_sigma, summary=ev.summary,
+                  amplitude_unit=res.B.unit, auc_unit=res.B.unit + "·s")
     refs = []
     if ev.method == "oasis":
         basis = {"noise": "σ", "max": "max(s)"}.get(cfg.spike_threshold_mode, "1")
@@ -171,14 +176,18 @@ def _events(res, cfg):
         rules = [f"检测阈值 H = max(10⁻¹², {cfg.spike_threshold:g} × {basis})。σ 优先取 OASIS 噪声估计，其次取去噪信号一阶差分的 MAD/0.6745，再回退至 1。",
                  "s ≥ min(H,0.5σ) 的帧按相邻间隔不大于 max_gap_s 分组。仅保留组内最大 s ≥ H 的组；time_s 为首次达到 H 的时间。",
                  "peak_time_s 为去噪信号最高点的时间；搜索从组首到末帧后的首次下降之前，并在下一候选组开始前截止。",
-                 "幅度 = 组首至组末去噪信号的最大值 − 组首前一帧的值；记录起点取首帧去噪值减首帧推断活动。spike_sum 是该段活动之和，max_spike 是候选帧最大活动。"]
+                 "幅值等于 peak_time_s 处的去噪值减基线。基线取组首前一帧的去噪值，组首在记录起点时取首帧去噪值减首帧推断活动。spike_sum 为组内活动总和，max_spike 为候选帧最大活动。",
+                 "AUC 从组首前一帧（最早为记录首帧）起算，在峰和组末均已过后，止于首次回落到基线处、下一候选组前一帧或记录末帧中最早者。"]
     else:
         params.update(min_distance_samples=max(1, round(cfg.min_distance_s * res.C.fs)),
                       min_prominence=cfg.min_prominence_mad*ev.noise_sigma)
         rules = ["σ = median(|r−median(r)|)/0.6745，r = data B − 去噪信号；零值时改用 data B 的尺度，再回退至 1。",
                  f"以去噪信号中位数 M 为基线，峰高阈值 = M + {cfg.threshold_mad:g}σ；同时施加最小突出度和最小峰间距。",
-                 "time_s 和 peak_time_s 均取检测峰时间；幅度 = 峰值 − M。半宽为相对于突出度的半高宽（样本数/fs）。"]
+                 "time_s 和 peak_time_s 均取检测峰时间，幅值 = 峰值 − M。半宽为相对于突出度的半高宽（样本数/fs）。",
+                 "AUC 从峰向两侧找到最近的基线交点。相邻检测峰以两峰间首次最低点划界，未到基线时在分界点或记录边缘截止。"]
         refs = ["SciPy · find_peaks", "SciPy · peak_widths"]
+    rules.append("events.csv 的 auc 为去噪信号减 baseline 后，在 [auc_start_s, auc_end_s] 内按实际采样时间计算的带符号梯形积分。边缘跨越基线时线性插值。")
+    refs.append("SciPy · trapezoid")
     rules.append("IEI = 相邻 time_s 之差；每分钟事件数 = 60 × 事件数/(末帧时间−首帧时间)。均值幅度和 IEI 中位数按事件汇总。")
     return _stage("events", "钙事件与记录内汇总", "analysis.detect_events / analysis._summary", params, rules, refs)
 
@@ -198,7 +207,10 @@ def _peth(res, cfg):
     if len(p.onsets):
         rules += ["基线窗为 [baseline_start_s, baseline_end_s)，响应窗为 [response_start_s, response_end_s]。"
                   "逐试次 Z = (ΔF/F − 基线均值)/基线样本标准差(ddof=1)，空基线均值取 0，无有效标准差时分母取 1。",
-                  "分别对刺激前归零曲线和 Z 分数计算窗内均值、响应窗最大值及 AUC = Σ(yᵢ+yᵢ₊₁) Δt/2。AUC 单位为对应纵轴单位 × s。潜伏期为响应窗内首次最大 Z 值的相对时间。",
+                  "分别对刺激前归零曲线和 Z 分数计算窗内均值及 AUC = Σ(yᵢ+yᵢ₊₁) Δt/2，单位为纵轴单位 × s。",
+                  ("基线窗和目标窗各取有限样本的最大值作为正峰。" if p.peak_direction == "positive" else
+                   "基线窗和目标窗各取有限样本的最小值作为负峰，保留原符号。") +
+                  "峰潜伏期为目标窗内首次达到该极值的采样时刻相对刺激的秒数。",
                   "逐时点跨试次均值与 SEM = 样本标准差/√有效试次数。"]
     return _stage("peth", "刺激锁定试次", "pipeline.pick_marker / analysis.peri_event", params, rules,
                   ["Sherathiya et al. (2021) · GuPPy 逐试次基线扣除", "SciPy · trapezoid"] if len(p.onsets) else [])
@@ -207,9 +219,9 @@ def _peth(res, cfg):
 def _statistics(res, cfg):
     comparisons = {}
     if res.peth is not None and len(res.peth.metrics):
-        m = res.peth.metrics
         for unit in ("dff", "z"):
-            comparisons["auc_" + unit] = paired_test(m["auc_baseline_" + unit], m["auc_target_" + unit])
+            for metric in ("auc", "peak"):
+                comparisons[f"{metric}_{unit}"] = paired_test(*res.peth.paired_values(metric, unit))
     if res.stim_events is not None and len(res.stim_events):
         frame = res.stim_events
         comparisons["rate_per_min"] = paired_test(frame["pre_rate_per_min"], frame["post_rate_per_min"])
@@ -272,12 +284,16 @@ def write_method_report(res, cfg):
     # Never include associations or exclusion lists from other recordings in an export.
     key = str(Path(a.source).resolve())
     for mapping in [configured["channels"]["excluded_channels"], configured["behavior_by_recording"],
-                    configured["intervals_by_recording"]]:
+                    configured["intervals_by_recording"], configured["manual_ttl_by_recording"]]:
         for other in list(mapping):
             if other != key:
                 del mapping[other]
     report = _json_safe(dict(schema_version=1, recording=key, software=versions, stages=stages,
                              configured_parameters=configured))
+    if a.manual_ttl_label:
+        from .marker_exports import marker_outputs, sha256
+        report["manual_ttl_output_sha256"] = {p.relative_to(res.out_dir).as_posix(): sha256(p)
+                                             for p in sorted(marker_outputs(res, cfg, manual_only=True))}
     def dump(value, indent=None):
         return json.dumps(value, indent=indent, ensure_ascii=False, allow_nan=False)
     (res.out_dir / "analysis_methods.json").write_text(dump(report, 2) + "\n", encoding="utf-8")

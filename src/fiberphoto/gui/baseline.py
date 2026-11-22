@@ -23,6 +23,11 @@ class BaselinePicker(QWidget):
         self.whole = QPushButton(clicked=lambda: self.clear_interval("signal"))
         self.no_baseline = QPushButton(clicked=lambda: self.clear_interval("baseline"))
         self.go_pre = QPushButton(clicked=lambda: self.host.tabs.setCurrentIndex(1))
+        self.ttl_button = QPushButton(clicked=lambda: self.toggle("ttl"))
+        self.ttl_button.setCheckable(True)
+        self.undo_ttl = QPushButton(clicked=lambda: self.host.edit_manual_ttl())
+        self.ttl_note = QLabel()
+        self.ttl_note.setWordWrap(True)
         self.note, self.signal_note = QLabel(), QLabel()
         row = QGridLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -34,8 +39,11 @@ class BaselinePicker(QWidget):
             row.addWidget(pick, i, 0)
             row.addWidget(clear, i, 1)
             row.addWidget(note, i, 2)
+        row.addWidget(self.ttl_button, 0, 3)
+        row.addWidget(self.undo_ttl, 0, 4)
+        row.addWidget(self.ttl_note, 1, 3, 1, 2)
         row.setColumnStretch(2, 1)
-        row.addWidget(self.go_pre, 0, 3, 2, 1)
+        row.addWidget(self.go_pre, 0, 5, 2, 1)
         self.canvas = None
         self.kind = None
         self.callbacks = []
@@ -67,8 +75,22 @@ class BaselinePicker(QWidget):
         self.no_baseline.setText(self.tr2("不选基线", "No baseline interval"))
         self.whole.setText(self.tr2("整段记录", "Use whole recording"))
         self.go_pre.setText(self.tr2("进入预处理", "Go to preprocessing"))
-        self.button.setEnabled(ready and self.kind != "signal")
-        self.signal_button.setEnabled(ready and self.kind != "baseline")
+        self.button.setEnabled(ready and self.kind in (None, "baseline"))
+        self.signal_button.setEnabled(ready and self.kind in (None, "signal"))
+        self.ttl_button.setText(self.tr2("结束添加 TTL", "Finish adding TTLs") if self.kind == "ttl" else
+                                self.tr2("添加 TTL 事件点", "Add TTL points"))
+        self.ttl_button.setChecked(self.kind == "ttl")
+        self.ttl_button.setEnabled(ready and self.kind in (None, "ttl"))
+        self.undo_ttl.setText(self.tr2("撤销上个 TTL", "Undo last TTL"))
+        points = self.host.cfg.manual_ttl_by_recording.get(str(self.host.current), [])
+        self.undo_ttl.setEnabled(ready and bool(points) and self.kind in (None, "ttl"))
+        if self.kind == "ttl":
+            self.ttl_note.setText(self.tr2("单击波形标记最近采样帧，可连续添加。Esc 结束。",
+                                          "Click the trace to mark the nearest frame. Esc finishes."))
+        elif raw is not None and raw.manual_ttl_label:
+            self.ttl_note.setText(self.tr2("刺激锁定的打标可选 ", "Available stimulus series: ") + raw.manual_ttl_label)
+        else:
+            self.ttl_note.clear()
         selected_baseline = fields["method"].currentData() == "signal_interval"
         selected_signal = any(fields[k].value() is not None for k in ("signal_start_s", "signal_end_s"))
         self.no_baseline.setEnabled(ready and selected_baseline and not self.kind)
@@ -130,8 +152,9 @@ class BaselinePicker(QWidget):
         raw = self.host.A
         if raw is None or self.canvas is None or self.host._busy:
             return
-        note = self.note if kind == "baseline" else self.signal_note
+        note = {"baseline": self.note, "signal": self.signal_note, "ttl": self.ttl_note}[kind]
         if self.canvas.toolbar.mode:
+            self.ttl_button.setChecked(False)
             note.setText(self.tr2("先关闭图表工具栏中的平移或缩放模式。", "Turn off toolbar pan or zoom first."))
             return
         names = raw.channel_names
@@ -141,11 +164,39 @@ class BaselinePicker(QWidget):
         self.canvas.widgetlock(self)
         self.canvas.setCursor(Qt.CrossCursor)
         self.kind = kind
+        if kind == "ttl":
+            self.canvas.setFocusPolicy(Qt.StrongFocus)
+            self.canvas.setFocus()
+            for name, callback in (("button_press_event", self._ttl_press), ("button_release_event", self._ttl_release),
+                                   ("key_press_event", self._ttl_key)):
+                self.callbacks.append(self.canvas.mpl_connect(name, callback))
+            self.refresh()
+            return
         for name, callback in (("button_press_event", self._press), ("motion_notify_event", self._move),
                                ("button_release_event", self._release)):
             self.callbacks.append(self.canvas.mpl_connect(name, callback))
         self.refresh()
         note.setText(self.tr2("在上方信号曲线上按住左键框选，或依次点击两个端点。", "Drag across the top signal plot, or click two endpoints."))
+
+    def _ttl_key(self, event):
+        if event.key == "escape":
+            self.stop()
+
+    def _ttl_press(self, event):
+        self.drag_x = (event.x, event.y) if event.button == 1 and event.inaxes in self.canvas.figure.axes else None
+
+    def _ttl_release(self, event):
+        origin, self.drag_x = self.drag_x, None
+        if (self.host._busy or origin is None or event.button != 1 or event.inaxes not in self.canvas.figure.axes
+                or event.xdata is None or np.hypot(event.x - origin[0], event.y - origin[1]) > 4 * self.canvas.device_pixel_ratio):
+            return
+        times = self.host.A.time
+        if not times[0] <= event.xdata <= times[-1]:
+            return
+        i = int(np.searchsorted(times, event.xdata))
+        if i and event.xdata - times[i - 1] <= times[i] - event.xdata:
+            i -= 1
+        self.host.edit_manual_ttl(float(times[i]))
 
     def _time_at(self, event):
         if event.inaxes is self.canvas.figure.axes[0] and event.xdata is not None:

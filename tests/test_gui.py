@@ -33,7 +33,7 @@ def run(qtbot, w, fn):
     qtbot.waitUntil(lambda: not w._busy, timeout=60000)
 
 
-def test_full_walkthrough(qtbot, window):
+def test_full_walkthrough(qtbot, window, tmp_path, monkeypatch):
     w = window
     assert w.cb_signal.currentText() == "470nm" and w.cb_control.currentData() == "405nm"
     run(qtbot, w, w.step_read)
@@ -43,8 +43,30 @@ def test_full_walkthrough(qtbot, window):
     assert "ΔF/F 公式" in w.log_view.toPlainText() and "405nm" in w.log_view.toPlainText()
     run(qtbot, w, w.step_peth)
     assert w.peth is not None and w.trial_table.rowCount() == len(w.peth.trials) > 0
+    peak_choice = w.form_peth.editors["peak_direction"]
+    peak_choice.setCurrentIndex(peak_choice.findData("negative"))
+    run(qtbot, w, w.step_peth)
+    assert w.peth.peak_direction == "negative"
+    for tab, unit in [(1, "%"), (0, "z")]:
+        w.peth_views.setCurrentIndex(tab)
+        auc, peak = w.fig_auc.canvas.figure.axes
+        assert "AUC" in auc.get_ylabel() and unit in auc.get_ylabel()
+        assert "负峰" in peak.get_ylabel() and unit in peak.get_ylabel()
     run(qtbot, w, w.step_events)
     assert w.events is not None and w.events.summary["n_events"] > 0
+    from PySide6.QtWidgets import QFileDialog
+    import pandas as pd
+
+    assert w.event_model.rowCount() == len(w.events.events)
+    assert float(w.event_model.data(w.event_model.index(0, 2))) == pytest.approx(w.events.events.auc.iloc[0])
+    path = tmp_path / "events-preview.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(path), "CSV"))
+    w.form_events.editors["spike_threshold"].setValue(100)
+    w.b_export_events.click()
+    exported = pd.read_csv(path)
+    assert exported.auc.tolist() == pytest.approx(w.events.events.auc.tolist())
+    assert exported.amplitude_unit.unique().tolist() == [w.B.unit]
+    assert exported.auc_unit.unique().tolist() == [w.B.unit + "·s"]
     assert w.fig_peth.canvas is not None and w.fig_rate.canvas is not None
     w.set_lang("en")
     assert w.tabs.tabText(0).endswith("Load data")
@@ -66,6 +88,7 @@ def test_clear_page_preserves_other_results_and_parameters(qtbot, window, tmp_pa
     w.clear_buttons["events"].click()
     assert w.events is w.stim_events is w.fig_events.canvas is w.fig_dist.canvas is w.fig_rate.canvas is None
     assert not w.lbl_events.text() and not w.clear_buttons["events"].isEnabled()
+    assert w.event_model.rowCount() == 0 and not w.b_export_events.isEnabled()
     assert w.peth is peth and w.fig_peth.canvas is peth_canvas
     run(qtbot, w, w.step_events)
     events, event_canvas = w.events, w.fig_events.canvas

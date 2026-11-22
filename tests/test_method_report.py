@@ -45,5 +45,8 @@ def test_report_records_fits_and_downstream_methods(tmp_path):
     assert stages["deconvolution"]["parameters"]["fitted_g"] == list(result.C.g)
     assert stages["events"]["parameters"]["actual_threshold"] == result.events.threshold
     assert stages["peth"]["parameters"]["accepted_trials"] == len(result.peth.onsets)
-    assert stages["statistics"]["parameters"]["comparisons"]["auc_z"]["n"] == len(result.peth.onsets)
+    comparisons = stages["statistics"]["parameters"]["comparisons"]
+    assert comparisons["auc_z"]["n"] == len(result.peth.onsets)
+    assert comparisons["peak_dff"]["n"] == len(result.peth.onsets)
+    assert stages["peth"]["parameters"]["peak_direction"] == "positive"
     assert "Friedrich, Zhou & Paninski (2017) · OASIS" in stages["deconvolution"]["references"]

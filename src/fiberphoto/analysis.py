@@ -38,6 +38,14 @@ class PethResult:
     metrics: pd.DataFrame      # one row per trial
     dff_unit: str              # unit of data B (e.g. ratio, % or z)
     skipped_incomplete_pre: int = 0  # complete time windows with a nonfinite pre-stimulus value
+    peak_direction: str = "positive"
+
+    def paired_values(self, metric: str, kind: str):
+        target = f"peak_{kind}" if metric == "peak" else f"auc_target_{kind}"
+        baseline = f"{metric}_baseline_{kind}"
+        if baseline not in self.metrics or target not in self.metrics:
+            return np.empty(0), np.empty(0)
+        return self.metrics[baseline].to_numpy(float), self.metrics[target].to_numpy(float)
 
     @property
     def trials(self) -> np.ndarray:
@@ -55,13 +63,21 @@ class PethResult:
         return np.nanstd(x, axis=0, ddof=1) / np.sqrt(np.maximum(n, 1))
 
 
-def _window_metrics(seg: np.ndarray, t_rel: np.ndarray, base_m, targ_m, dt: float, tag: str) -> dict:
+def _window_extremum(values, direction):
+    finite = np.flatnonzero(np.isfinite(values))
+    if finite.size == 0:
+        return None
+    select = np.argmax if direction == "positive" else np.argmin
+    return finite[select(values[finite])]
+
+
+def _window_metrics(seg: np.ndarray, base_m, targ_m, dt: float, tag: str, baseline_index, target_index) -> dict:
     base, targ = seg[base_m], seg[targ_m]
-    k = int(np.argmax(targ)) if targ.size else 0
     return {
         f"baseline_mean_{tag}": float(base.mean()) if base.size else np.nan,
         f"target_mean_{tag}": float(targ.mean()) if targ.size else np.nan,
-        f"peak_{tag}": float(targ[k]) if targ.size else np.nan,
+        f"peak_baseline_{tag}": float(base[baseline_index]) if baseline_index is not None else np.nan,
+        f"peak_{tag}": float(targ[target_index]) if target_index is not None else np.nan,
         f"auc_baseline_{tag}": float(trapezoid(base, dx=dt)) if base.size > 1 else np.nan,
         f"auc_target_{tag}": float(trapezoid(targ, dx=dt)) if targ.size > 1 else np.nan,
     }
@@ -75,6 +91,8 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
     stimulus. ΔF/F is centered on the entire pre-stimulus segment, excluding t=0.
     AUC is the trapezoid integral over each window (unit × s).
     """
+    if cfg.peak_direction not in ("positive", "negative"):
+        raise ValueError("峰方向须为正峰或负峰 / Peak direction must be positive or negative")
     onsets = merge_close(onsets, cfg.min_interval_s)
     n_pre = int(round(cfg.pre_s * b.fs))
     if n_pre < 1:
@@ -104,15 +122,16 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
         zs.append(z)
         dffs.append(centered)
         used.append(t0)
-        targ = z[targ_m]
+        baseline_index = _window_extremum(centered[base_m], cfg.peak_direction)
+        peak_index = _window_extremum(centered[targ_m], cfg.peak_direction)
         row = {"trial": len(zs), "onset_s": t0, "prestimulus_mean_input_dff": pre_mean,
-               "peak_latency_s": float(t_rel[targ_m][int(np.argmax(targ))]) if targ.size else np.nan}
-        row |= _window_metrics(z, t_rel, base_m, targ_m, dt, "z")
-        row |= _window_metrics(centered, t_rel, base_m, targ_m, dt, "dff")
+               "peak_latency_s": float(t_rel[targ_m][peak_index]) if peak_index is not None else np.nan}
+        row |= _window_metrics(z, base_m, targ_m, dt, "z", baseline_index, peak_index)
+        row |= _window_metrics(centered, base_m, targ_m, dt, "dff", baseline_index, peak_index)
         rows.append(row)
     empty = np.empty((0, t_rel.size))
     return PethResult(marker, t_rel, np.vstack(zs) if zs else empty, np.vstack(dffs) if dffs else empty,
-                      np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre)
+                      np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre, cfg.peak_direction)
 
 
 @dataclass
@@ -122,6 +141,25 @@ class EventResult:
     threshold: float           # on the denoised trace ("peak") or on the spike train ("oasis")
     noise_sigma: float
     method: str = "peak"
+
+    def to_csv(self, path, unit: str):
+        """Export the measured events without repeating detection."""
+        self.events.assign(amplitude_unit=unit, auc_unit=unit + "·s").to_csv(
+            path, index=False, float_format="%.17g")
+
+
+def _area(c, baseline, left, right):
+    """Integrate the sampled trace, interpolating baseline crossings at the edges."""
+    t = c.time[left:right + 1].astype(float, copy=True)
+    y = c.denoised[left:right + 1] - baseline
+    if len(y) > 1 and y[0] < 0 <= y[1]:
+        t[0] += (t[1] - t[0]) * (-y[0]) / (y[1] - y[0])
+        y[0] = 0
+    if len(y) > 1 and y[-1] < 0 <= y[-2]:
+        t[-1] = t[-2] + (t[-1] - t[-2]) * y[-2] / (y[-2] - y[-1])
+        y[-1] = 0
+    return {"auc_start_s": t[0], "auc_end_s": t[-1], "baseline": baseline,
+            "auc": float(trapezoid(y, x=t))}
 
 
 def detect_events(c: DeconvData, b: DffData, cfg: EventConfig) -> EventResult:
@@ -173,13 +211,19 @@ def detect_spike_events(c: DeconvData, cfg: EventConfig) -> EventResult:
         if i + 1 < len(groups):
             end = min(end, groups[i + 1][0] - 1)
         peak = first + np.argmax(c.denoised[first:end + 1])
+        limit = groups[i + 1][0] - 1 if i + 1 < len(groups) else len(c.time) - 1
+        tail = max(last, peak)
+        returns = np.flatnonzero(c.denoised[tail:limit + 1] <= before)
+        right = tail + returns[0] if returns.size else limit
         rows.append({"time_s": c.time[g[np.argmax(sg >= thr)]],
                      "peak_time_s": c.time[peak],
-                     "amplitude": float(c.denoised[first:last + 1].max() - before),
+                     "amplitude": float(c.denoised[peak] - before),
+                     **_area(c, before, max(0, first - 1), right),
                      "spike_sum": float(c.spikes[first: last + 1].sum()),
                      "max_spike": float(sg.max()),
                      "n_frames": int(g.size)})
-    ev = pd.DataFrame(rows, columns=["time_s", "peak_time_s", "amplitude", "spike_sum", "max_spike", "n_frames"])
+    ev = pd.DataFrame(rows, columns=["time_s", "peak_time_s", "amplitude", "auc", "auc_start_s",
+                                     "auc_end_s", "baseline", "spike_sum", "max_spike", "n_frames"])
     ev["iei_s"] = ev["time_s"].diff()
     return EventResult(ev, _summary(ev, c, sn, thr), thr, sn, "oasis")
 
@@ -191,6 +235,7 @@ def _summary(ev: pd.DataFrame, c: DeconvData, sigma: float, thr: float) -> dict:
         "duration_min": float(dur_min),
         "rate_per_min": float(len(ev) / dur_min) if dur_min > 0 else np.nan,
         "mean_amplitude": float(ev["amplitude"].mean()) if len(ev) else np.nan,
+        "mean_auc": float(ev["auc"].mean()) if len(ev) else np.nan,
         "median_iei_s": float(ev["iei_s"].median()) if len(ev) > 1 else np.nan,
         "mean_half_width_s": float(ev["half_width_s"].mean()) if len(ev) and "half_width_s" in ev else np.nan,
         "noise_sigma": float(sigma),
@@ -213,6 +258,13 @@ def detect_peak_events(c: DeconvData, b: DffData, cfg: EventConfig) -> EventResu
     peaks, props = sps.find_peaks(y, height=thr, distance=dist,
                                   prominence=cfg.min_prominence_mad * sigma)
     widths = sps.peak_widths(y, peaks, rel_height=0.5)[0] / c.fs if peaks.size else np.array([])
+    valleys = [a + np.argmin(y[a:b + 1]) for a, b in zip(peaks[:-1], peaks[1:])]
+    areas = []
+    for peak, left, right in zip(peaks, [0, *valleys], [*valleys, len(y) - 1]):
+        before = np.flatnonzero(y[left:peak + 1] <= floor)
+        after = np.flatnonzero(y[peak:right + 1] <= floor)
+        areas.append(_area(c, floor, left + before[-1] if before.size else left,
+                           peak + after[0] if after.size else right))
     ev = pd.DataFrame({
         "time_s": c.time[peaks],
         "peak_time_s": c.time[peaks],
@@ -220,6 +272,7 @@ def detect_peak_events(c: DeconvData, b: DffData, cfg: EventConfig) -> EventResu
         "prominence": props.get("prominences", np.array([])),
         "half_width_s": widths,
     })
+    ev = ev.join(pd.DataFrame(areas, columns=["auc", "auc_start_s", "auc_end_s", "baseline"]))
     ev["iei_s"] = ev["time_s"].diff()
     return EventResult(ev, _summary(ev, c, sigma, thr), float(thr), float(sigma), "peak")
 
@@ -250,7 +303,7 @@ def paired_test(a: np.ndarray, b: np.ndarray) -> dict:
     """Wilcoxon signed-rank (and paired t) for pre vs post comparisons."""
     from scipy import stats
     a, b = np.asarray(a, float), np.asarray(b, float)
-    m = ~(np.isnan(a) | np.isnan(b))
+    m = np.isfinite(a) & np.isfinite(b)
     a, b = a[m], b[m]
     out = {"n": int(a.size), "wilcoxon_p": np.nan, "ttest_p": np.nan}
     if a.size >= 3:

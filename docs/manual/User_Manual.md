@@ -1,6 +1,6 @@
 # FiberLume Fiber Photometry Analysis · Manual for New Students
 
-> Version 0.6.3. Working through the sample data takes about 15 minutes. In versions 0.6.0–0.6.2, use Help → Check for updates to download the patch and restart.
+> Version 0.6.4. Working through the sample data takes about 15 minutes.
 
 ## Contents
 
@@ -23,7 +23,7 @@ FiberLume divides the analysis into five pages. Each page provides controls for 
 |---|---|---|
 | ① Load data | Reads a TDMS file and finds the calcium signal channel (470/465 nm), the isosbestic control (405/410 nm) and the behaviour markers (TTL) | **data A** (raw data) |
 | ② Preprocess | Removes the slow drift caused by photobleaching and computes ΔF/F, then runs OASIS deconvolution to get a denoised trace and inferred spikes | **data B** (ΔF/F), **data C** (deconvolution) |
-| ③ Peri-event | Cuts a trial around every stimulus and reports z-score, ΔF/F and AUC together | heatmaps, mean trace, paired AUC plot |
+| ③ Peri-event | Aligns trials to each stimulus and compares baseline and response windows | Heatmaps, mean traces and paired AUC and peak plots |
 | ④ Events | Following OASIS, treats spikes as calcium events; reports rate, amplitude and interval, and compares before vs after stimuli | event table and distributions |
 | ⑤ Export & batch | Saves all data backups, tables and figures, or processes a whole folder with the same parameters | results folder |
 
@@ -73,13 +73,15 @@ Click **Sample data** on the left. The app creates a `fiberphoto_sample_data` fo
 
 In the figure, blue is the calcium signal, orange is the control and the vertical lines are markers. After reading, “Markers: DI1_Stim (20) …” shows how many markers were found on each channel.
 
+To annotate a known stimulus time, click **Add TTL points**, then click the waveform preview. Each mark snaps to the nearest recorded frame. Continue marking, undo the latest point, or press Esc to finish. Select **Manual TTL** as the marker in the Peri-event tab. Save parameters to retain the annotations for this recording.
+
 ### Step 3: ② Preprocess
 
 Open **② Preprocess** and click **Run preprocessing** (the defaults are fine).
 
 ![Preprocess](img/en_03_pre.png)
 
-- The upper right panel shows the signal, fitted baseline and resulting data B. If quiet periods still drift, try the optional rolling median in the preprocessing settings. Compare quiet periods and sustained responses before and after correction.
+- The upper right panel shows the signal, its baseline and the resulting data B. When a loaded Plexon signal has a matching R column, select the device ratio or uncheck it to recompute from raw fluorescence. Other recording formats use their own preprocessing settings.
 - Bottom right: grey is ΔF/F, green is the OASIS denoised trace, and the small panel shows the inferred spikes (data C). τ in the title is the calcium decay time constant, typically 0.5–2 s for GCaMP6s.
 
 ### Step 4: ③ Peri-event
@@ -90,7 +92,7 @@ Open **③ Peri-event** and click **Run peri-event analysis**.
 
 - **Heatmap**: one row per trial; 0 s (black line) is the stimulus.
 - **Mean trace**: the grey band is the **baseline window**, the light blue band is the **target window**, and the line with shading is mean ± SEM.
-- **Paired AUC plot (right)**: each grey line joins a trial’s baseline AUC to its target AUC, with the paired test p-value above. The top panel is z-score, the bottom panel ΔF/F.
+- The **paired comparisons** on the right show AUC and peak in the baseline and response windows. Each line connects measurements from the same trial in the selected Z or ΔF/F view. Positive peaks use the maximum of each window. Negative peaks use the signed minimum. Response latency is the time of the first extremum in the selected direction.
 - **Trial table**: latency, peak, AUC and more for each trial. Scroll sideways to see all columns.
 
 Click the **ΔF/F** tab above the figure to see the same analysis in ΔF/F:
@@ -105,7 +107,7 @@ Open **④ Events** and click **Run event detection**.
 
 - Red triangles mark detected events; the red dashed line in the small panel is the spike threshold (default 0.8 × noise σ).
 - The three lower figures show the amplitude distribution, the interval distribution and the event rate before vs after stimuli.
-- The left panel shows the number of events, rate (/min), mean amplitude and noise σ.
+- The event table lists peak time, amplitude, AUC, detection time, integration limits and baseline. Click **Export current events CSV** to save the displayed run. Amplitude is the height of the denoised peak above the event baseline. The signed AUC integrates the denoised trace relative to the same baseline using the sample timestamps, in trace units × seconds.
 
 ### Step 6: ⑤ Export & batch
 
@@ -164,7 +166,6 @@ Every parameter has a hover tip. These are the ones you are most likely to chang
 | Low-pass filter | 10 Hz | Removes high-frequency noise; affects data B display and the peri-event analysis only. |
 | Downsample to | 20 Hz | Smaller files. Going from 50 to 20 Hz does not affect calcium signals. |
 | Output unit | ΔF/F (%) | Applies to recomputed fluorescence. Direct Plexon R imports keep the device ratio. |
-| ΔF/F rolling median window | 0 s (off) | Subtracts the median ΔF/F in a window centred on each frame. Choose a window longer than the responses of interest and shorter than the drift. Responses occupying over half the window can be attenuated. |
 | Calcium model | AR(1) | AR(1) when the indicator rises quickly; try AR(2) for slower rises. |
 
 Deconvolution uses the **de-drifted ΔF/F (data B, before low-pass)**, not the raw data.
@@ -177,6 +178,7 @@ Deconvolution uses the **de-drifted ΔF/F (data B, before low-pass)**, not the r
 | Time before / after | 5 s / 10 s | The window cut for each trial (heatmap x-axis). |
 | Baseline start / end | −5 s / 0 s | Sets the window for z-scores and baseline AUC. ΔF/F centring uses the full pre-stimulus duration. |
 | Target window start / end | 0 s / 5 s | Window for the target AUC and the peak. |
+| Peak direction | Positive | Select positive for increases and negative for decreases. Both windows and the response latency use this direction. |
 | Merge interval | 0 s | Markers closer than this count as one (removes duplicate markers). |
 
 All times are in seconds relative to the stimulus; negative means before.
@@ -205,11 +207,12 @@ Each recording gets its own sub-folder in the output folder:
 | `<name>_dataA.csv` / `_dataB.csv` / `_dataC.csv` | The same as tables, open in Excel |
 | `peth_trials_z.csv` / `peth_trials_dff.csv` | Z-score and pre-stimulus-centred ΔF/F traces. Rows are relative times, with one column per trial plus mean and SEM. |
 | `peth_metrics.csv` | Per-trial latency, baseline/target means, peak, AUC (for both z and ΔF/F) |
-| `events.csv` | Time, amplitude, spike sum, max spike and interval of each event |
+| `events.csv` | Per-event times, amplitude, AUC, integration bounds, baseline, units and detector-specific measurements. |
+| `peth_paired_stats.csv` | Paired baseline and response AUC and peak comparisons with direction, units, sample counts, means and p-values. |
 | `events_vs_stimulus.csv` | Events and rate before/after each stimulus |
 | `summary.json` | Summary metrics for the recording |
 | `parameters.json` | All parameters used (load it in the app to reproduce) |
-| `figures/` | 01 raw, 02 de-drift, 03 deconvolution & events, 04 heatmaps (z / ΔF/F), 05 AUC, 06 event distributions, 07 event rate pre/post |
+| `figures/` | 01 raw, 02 de-drift, 03 deconvolution and events, 04 heatmaps (Z / ΔF/F), 05 paired AUC and peak comparisons, 06 event distributions, 07 event rate pre/post |
 
 A batch run also writes `batch_summary.csv` at the top of the output folder, one row per animal, ready for group statistics.
 

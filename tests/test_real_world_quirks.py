@@ -131,6 +131,35 @@ def test_windows_are_user_set_in_seconds():
     assert (m["peak_z"] > 20).all()
 
 
+def test_peri_event_signed_window_extrema_and_first_latency():
+    from dataclasses import replace
+    from fiberphoto.analysis import peri_event
+    from fiberphoto.config import PethConfig
+    from fiberphoto.data import DffData
+    from fiberphoto.plotting import fig_peth_comparisons
+    from matplotlib import pyplot as plt
+
+    t = np.arange(10, dtype=float)
+    x = np.array([0., 0., 1., 2., 3., -1., 6., -3., -3., 0.])
+    b = DffData(time=t, dff=x, fs=1., signal=x, reference=x, method="test", unit="ratio")
+    cfg = PethConfig(pre_s=3, post_s=3, baseline_start_s=-3, baseline_end_s=0,
+                     response_start_s=0, response_end_s=3)
+    pos = peri_event(b, [5.], cfg)
+    neg = peri_event(b, [5.], replace(cfg, peak_direction="negative"))
+    for kind in ("z", "dff"):
+        # These baseline samples have unit sample SD and mean 2.
+        np.testing.assert_allclose(pos.paired_values("peak", kind), [[1.], [4.]])
+        np.testing.assert_allclose(neg.paired_values("peak", kind), [[-1.], [-5.]])
+        np.testing.assert_array_equal(pos.paired_values("auc", kind), neg.paired_values("auc", kind))
+    assert pos.metrics.iloc[0].peak_latency_s == 1. and neg.metrics.iloc[0].peak_latency_s == 2.
+
+    # Older trial tables can supply AUC even if baseline peaks were not saved.
+    old = replace(neg, metrics=neg.metrics.drop(columns=["peak_baseline_dff"]))
+    fig = fig_peth_comparisons(old, "en", kind="dff")
+    assert "n = 0" in fig.axes[1].get_title(loc="left")
+    plt.close(fig)
+
+
 def test_peth_centers_whole_pre_stimulus_segment_separately_from_z_window():
     from fiberphoto.analysis import peri_event
     from fiberphoto.config import PethConfig

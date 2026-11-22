@@ -51,7 +51,6 @@ class DedriftConfig:
     baseline_end_s: float = 0.0  # fixed F0 requires a deliberately selected, nonempty interval
     signal_start_s: Optional[float] = None  # explicit acquisition-clock window used for analysis
     signal_end_s: Optional[float] = None
-    center_window_s: float = 0.0    # subtract a centered rolling median of ΔF/F; 0 = off
 
 
 @dataclass
@@ -79,6 +78,7 @@ class PethConfig:
     response_start_s: float = 0.0   # target window for AUC / peak metrics (s from stimulus)
     response_end_s: float = 5.0
     min_interval_s: float = 0.0     # merge markers closer than this
+    peak_direction: str = "positive"  # positive: window maximum; negative: signed minimum
 
 
 @dataclass
@@ -112,6 +112,7 @@ class PipelineConfig:
     save_csv: bool = True           # CSV copies of data A/B/C next to the HDF5 file
     behavior_by_recording: dict[str, BehaviorConfig] = field(default_factory=dict)
     intervals_by_recording: dict[str, dict] = field(default_factory=dict)
+    manual_ttl_by_recording: dict[str, list[float]] = field(default_factory=dict)  # acquisition seconds in click order
 
     def for_recording(self, path: str | Path | None) -> "PipelineConfig":
         overrides = self.intervals_by_recording.get(str(Path(path).resolve())) if path else None
@@ -132,6 +133,8 @@ class PipelineConfig:
             if f.name == "behavior_by_recording":
                 kwargs[f.name] = {str(Path(p).resolve()): BehaviorConfig(**spec)
                                   for p, spec in d[f.name].items()}
+            elif f.name == "manual_ttl_by_recording":
+                kwargs[f.name] = {str(Path(p).resolve()): list(points) for p, points in d[f.name].items()}
             elif f.name == "intervals_by_recording":
                 allowed = {"signal_start_s", "signal_end_s", "baseline_start_s", "baseline_end_s",
                            "method", "prefer_plexon_dff"}

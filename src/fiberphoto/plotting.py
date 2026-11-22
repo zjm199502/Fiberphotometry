@@ -14,9 +14,10 @@ import matplotlib.ticker
 import numpy as np
 from matplotlib import font_manager
 from matplotlib.colors import TwoSlopeNorm
+from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 
-from .analysis import EventResult, PethResult
+from .analysis import EventResult, PethResult, paired_test
 from .data import DeconvData, DffData, RawData
 from .i18n import tr
 from .display_traces import plot_trace
@@ -65,9 +66,36 @@ def setup_style(lang: str = "zh") -> None:
     })
 
 
-def _stim_lines(ax, onsets, label: Optional[str] = None):
-    for i, t in enumerate(onsets):
-        ax.axvline(t, color=C_STIM, lw=0.8, alpha=0.5, label=label if i == 0 else None)
+def set_stimulus_lines(ax, onsets, label: Optional[str] = None):
+    segments = [[(t, 0), (t, 1)] for t in onsets]
+    for lines in ax.collections:
+        if lines.get_gid() == "stimulus-times":
+            lines.set_segments(segments)
+            return
+    lines = LineCollection(segments, transform=ax.get_xaxis_transform(), colors=C_STIM, linewidths=.8,
+                           alpha=.5, label=label)
+    lines.set_gid("stimulus-times")
+    ax.add_collection(lines, autolim=False)
+
+
+def update_manual_ttl_overlay(axes, raw):
+    """Update the editable marker series without rescaling the raw trace."""
+    points = raw.markers.get(raw.manual_ttl_label, ())
+    for ax in axes:
+        for collection in list(ax.collections):
+            if collection.get_gid() == "manual-ttl":
+                collection.remove()
+        if len(points):
+            segments = [[(t, 0), (t, 1)] for t in points]
+            lines = LineCollection(segments, transform=ax.get_xaxis_transform(), colors="#b44068",
+                                   linewidths=1.1, linestyles="dashed", label=raw.manual_ttl_label)
+            lines.set_gid("manual-ttl")
+            ax.add_collection(lines, autolim=False)
+    handles, _ = axes[0].get_legend_handles_labels()
+    if handles:
+        axes[0].legend(loc="upper right", ncol=min(len(handles), 4))
+    elif axes[0].get_legend() is not None:
+        axes[0].get_legend().remove()
 
 
 def fig_raw(a: RawData, lang: str = "zh") -> Figure:
@@ -88,11 +116,12 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
         axes[-1].set_ylabel(f"{label}\n{a.behavior_info['value_column']}")
     for ax in axes:
         for k, (label, on) in enumerate(a.markers.items()):
+            if label == a.manual_ttl_label:
+                continue
             col = MARKER_COLORS[k % len(MARKER_COLORS)]
             for i, t in enumerate(on):
                 ax.axvline(t, color=col, lw=0.6, alpha=0.5, label=label if i == 0 else None)
-    if a.markers:
-        axes[0].legend(loc="upper right", ncol=len(a.markers))
+    update_manual_ttl_overlay(axes, a)
     axes[-1].set_xlabel(tr("time_s", lang))
     axes[0].set_title(tr("raw_title", lang), loc="left")
     fig.tight_layout()
@@ -108,7 +137,7 @@ def fig_dedrift(b: DffData, onsets=(), lang: str = "zh") -> Figure:
     ax1.set_ylabel(tr("fluor", lang))
     ax1.legend(loc="upper right", ncol=2)
     plot_trace(ax2, b.time, b.dff, color=C_SIGNAL, lw=0.6)
-    _stim_lines(ax2, onsets, tr("stimulus", lang))
+    set_stimulus_lines(ax2, onsets, tr("stimulus", lang))
     ax2.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax2.set_xlabel(tr("time_s", lang))
     title = f"{tr('dedrift_title', lang)} · {b.method}"
@@ -136,7 +165,7 @@ def fig_deconv(c: DeconvData, b: DffData, ev: EventResult, onsets=(), lang: str 
         ax1.plot(c.time[idx], c.denoised[idx], linestyle="none", marker=triangle,
                  color=C_EVENT, ms=10, markeredgecolor="white", markeredgewidth=0.4,
                  label=tr("event_peaks", lang), zorder=4)
-    _stim_lines(ax1, onsets)
+    set_stimulus_lines(ax1, onsets)
     ax1.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
     ax1.legend(loc="upper right", ncol=4)
     plot_trace(ax2, c.time, c.spikes, spikes=True, color=INK_2, lw=0.6)
@@ -209,6 +238,8 @@ def _paired_plot(ax, pre, post, lang, ylabel, title, stats: Optional[dict] = Non
                  labels=("pre", "post")):
     x = np.array([0, 1])
     pre, post = np.asarray(pre, float), np.asarray(post, float)
+    valid = np.isfinite(pre) & np.isfinite(post)
+    pre, post = pre[valid], post[valid]
     jit = np.random.default_rng(0).uniform(-0.05, 0.05, len(pre))  # separate tied values
     for j, a, b in zip(jit, pre, post):
         ax.plot(x + j, [a, b], color="#b5b4ae", lw=0.8, zorder=1)
@@ -229,24 +260,32 @@ def _paired_plot(ax, pre, post, lang, ylabel, title, stats: Optional[dict] = Non
 
 
 def auc_stats(p: PethResult, kind: str) -> dict:
-    from .analysis import paired_test
-    m = p.metrics
-    if not len(m):
-        return {}
-    return paired_test(m[f"auc_baseline_{kind}"], m[f"auc_target_{kind}"])
+    return paired_test(*p.paired_values("auc", kind)) if len(p.metrics) else {}
+
+
+def fig_peth_comparisons(p: PethResult, lang: str = "zh", *, kind=None, metric="auc", vertical=False) -> Figure:
+    """Show both measures in the active GUI unit, or export one measure in both units."""
+    panels = [("auc", kind), ("peak", kind)] if kind else [(metric, "z"), (metric, "dff")]
+    if kind or vertical:
+        fig, axes = plt.subplots(2, 1, figsize=(3.5, 6.4))
+    else:
+        fig, axes = plt.subplots(1, 2, figsize=(7, 3.9))
+    for ax, (measure, scale) in zip(axes, panels):
+        pre, post = p.paired_values(measure, scale)
+        unit = "z" if scale == "z" else p.dff_unit
+        name = tr("auc" if measure == "auc" else f"peak_{p.peak_direction}", lang)
+        ylabel = f"{name} ({unit} · s)" if measure == "auc" else f"{name} ({unit})"
+        stats = paired_test(pre, post)
+        title = name if kind else _kind_label(scale, p.dff_unit, lang)
+        _paired_plot(ax, pre, post, lang, ylabel, title, stats, labels=("baseline_win", "target_win"))
+        if stats["n"] < 3 or not np.isfinite(stats["wilcoxon_p"]):
+            ax.set_title(f"{title}\nn = {stats['n']}", loc="left")
+    fig.tight_layout()
+    return fig
 
 
 def fig_auc(p: PethResult, lang: str = "zh", vertical: bool = False) -> Figure:
-    """AUC of the baseline vs target window, for z-score and ΔF/F side by side."""
-    fig, axes = plt.subplots(2, 1, figsize=(3.4, 6.4)) if vertical else plt.subplots(1, 2, figsize=(6.4, 3.9))
-    m = p.metrics
-    for ax, kind in zip(axes, ("z", "dff")):
-        unit = _kind_label(kind, p.dff_unit, lang)
-        _paired_plot(ax, m.get(f"auc_baseline_{kind}", []), m.get(f"auc_target_{kind}", []), lang,
-                     f"AUC ({unit} · s)", unit, auc_stats(p, kind), labels=("baseline_win", "target_win"))
-    fig.suptitle(tr("auc_title", lang), x=0.02, ha="left", fontsize=11)
-    fig.tight_layout()
-    return fig
+    return fig_peth_comparisons(p, lang, metric="auc", vertical=vertical)
 
 
 def fig_event_distributions(ev: EventResult, lang: str = "zh", unit: str = "%") -> Figure:
