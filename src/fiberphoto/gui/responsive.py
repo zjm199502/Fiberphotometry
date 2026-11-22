@@ -1,6 +1,9 @@
 """Move the same live controls or figures between splitter panes and compact tabs."""
 from PySide6.QtCore import QSize
-from PySide6.QtWidgets import QStackedLayout, QTabWidget, QWidget
+from PySide6.QtWidgets import QLayout, QStackedLayout, QTabWidget, QWidget
+
+
+COMPACT_TAB_STYLE = "QTabBar::tab { padding: 2px 8px; }"
 
 
 class ResponsivePanels(QWidget):
@@ -15,7 +18,9 @@ class ResponsivePanels(QWidget):
         self.positions = [(panel.parentWidget(), panel.parentWidget().indexOf(panel)) for panel in panels]
         self.original_sizes = {}
         self.compact = QTabWidget()
+        self.compact.tabBar().setStyleSheet(COMPACT_TAB_STYLE)
         self.deck = QStackedLayout(self)
+        self.deck.setSizeConstraint(QLayout.SetNoConstraint)
         self.deck.addWidget(splitter)
         self.deck.addWidget(self.compact)
         self.last_tab = 0
@@ -52,5 +57,6 @@ class ResponsivePanels(QWidget):
         self._reflow()
 
     def select(self, index):
+        self.last_tab = index
         if self.compact.count():
             self.compact.setCurrentIndex(index)

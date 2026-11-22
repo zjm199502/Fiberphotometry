@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-layout-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   layout:
     name: ${{ matrix.os }} at ${{ matrix.scale }}x
@@ -31,6 +35,19 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[gui,test]"
       - run: python -m pytest tests/test_gui_layout.py -q --disable-warnings
+      - name: Open the installed macOS application with the candidate patch
+        if: runner.os == 'macOS' && matrix.scale == '1'
+        run: |
+          qa="$RUNNER_TEMP/native-patch"
+          python packaging/patch_channel.py stage "$qa"
+          python -c "import runpy, sys; from pathlib import Path; runpy.run_path('tests/conftest.py')['write_abet_xml'](Path(sys.argv[1]))" "$qa/sample_PhotoData.xml"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/base.dmg" https://github.com/zjm199502/Fiberphotometry/releases/download/v0.6.0/FiberLume-0.6.0-macOS-AppleSilicon.dmg
+          mount="$RUNNER_TEMP/fiberlume-mounted"
+          hdiutil attach "$RUNNER_TEMP/base.dmg" -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          "$mount/FiberLume.app/Contents/MacOS/fiberphoto" --verify-install "$qa" || { cat "$qa/verify-error.txt"; exit 1; }
+          cmp "$qa/expected-version.txt" "$qa/running-version.txt"
+          test -s "$qa/plexon-results/sample_PhotoData/abet/locked/overview.png"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

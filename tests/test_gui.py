@@ -33,6 +33,26 @@ def run(qtbot, w, fn):
     qtbot.waitUntil(lambda: not w._busy, timeout=60000)
 
 
+def test_compact_recording_switch_and_preview(qtbot, window):
+    w = window
+    w.resize(671, 420)
+    w.show()
+    qtbot.waitUntil(w.file_combo.isVisible)
+    assert w.file_combo.count() == 2
+    assert not w.file_sidebar.isVisible() and not w.log_dock.isVisible()
+    run(qtbot, w, w.step_read)
+    first = w.current
+    raw = w.A
+    assert w.read_panels.compact.currentWidget() is w.fig_raw
+    w.file_combo.activated.emit(1)
+    assert w.current != first and w.A is None and w.read_panels.compact.currentIndex() == 0
+    w.file_combo.activated.emit(0)
+    assert w.current == first and w.A is raw and w.read_panels.compact.currentWidget() is w.fig_raw
+    w.resize(1400, 900)
+    qtbot.waitUntil(w.file_sidebar.isVisible)
+    assert w.read_panels.compact.count() == 0 and w.A is raw
+
+
 def test_full_walkthrough(qtbot, window, tmp_path, monkeypatch):
     w = window
     assert w.cb_signal.currentText() == "470nm" and w.cb_control.currentData() == "405nm"

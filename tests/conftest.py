@@ -6,7 +6,10 @@ import pytest
 
 @pytest.fixture
 def abet_xml(tmp_path):
-    path = tmp_path / "test.xml"
+    return write_abet_xml(tmp_path / "test.xml")
+
+
+def write_abet_xml(path):
     root = ET.Element("AbetSession")
     data = ET.SubElement(root, "SessionData")
     ET.SubElement(data, "Name").text = "Synthetic cue and tray"

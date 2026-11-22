@@ -30,7 +30,7 @@ from ..abet_batch import find_abet_sidecar
 from .abet import AbetDialog
 from .behavior import BehaviorDialog
 from .event_table import EventTableModel
-from .responsive import ResponsivePanels
+from .responsive import COMPACT_TAB_STYLE, ResponsivePanels
 from .dialog_layout import confirm_details
 from .baseline import BaselinePicker
 from ..preprocess import (DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula,
@@ -145,6 +145,11 @@ class MainWindow(QMainWindow):
         if short != self._short_window:
             self._short_window = short
             self.log_dock.setVisible(not short)
+            for tabs in (self.tabs, self.peth_views):
+                tabs.tabBar().setStyleSheet(COMPACT_TAB_STYLE if short else "")
+            for label, help_button in self.page_help:
+                label.setVisible(not short)
+                help_button.setVisible(short)
 
     # ------------------------------------------------------------------ state
     def _reset_results(self):
@@ -253,6 +258,12 @@ class MainWindow(QMainWindow):
         lab.setObjectName("help")
         row = QHBoxLayout()
         row.addWidget(lab, 1)
+        help_button = QPushButton()
+        help_button.clicked.connect(lambda: QMessageBox.information(self, self.tabs.tabText(self.tabs.currentIndex()),
+                                                                    lab.text()))
+        help_button.hide()
+        row.addWidget(help_button)
+        self.page_help.append((lab, help_button))
         button = QPushButton(clicked=lambda: self.clear_page_results(page))
         self.clear_buttons[page] = button
         row.addWidget(button)
@@ -261,6 +272,7 @@ class MainWindow(QMainWindow):
 
     def _build_tabs(self):
         self.clear_buttons = {}
+        self.page_help = []
         self.tabs = QTabWidget()
         self.tabs.addTab(_scroll(self._tab_read()), "")
         self.tabs.addTab(_scroll(self._tab_pre()), "")
@@ -649,6 +661,8 @@ class MainWindow(QMainWindow):
         self.a_compact_remove.setText(t("btn_remove"))
         for panels in self.findChildren(ResponsivePanels):
             panels.set_lang(self.lang)
+        for _, help_button in self.page_help:
+            help_button.setText("页面说明" if self.lang == "zh" else "Page help")
         for b, k in ((self.b_add, "btn_add"), (self.b_folder, "btn_folder"),
                      (self.b_sample, "btn_sample"), (self.b_remove, "btn_remove")):
             b.setText(t(k))
@@ -971,6 +985,7 @@ class MainWindow(QMainWindow):
         self._show_markers_found()
         self.redraw_all()
         self.tabs.setCurrentIndex(state.tab if state else 0)
+        self.read_panels.select(1 if self.A is not None else 0)
         self._update_enabled()
 
     # -------------------------------------------------------- channel panel

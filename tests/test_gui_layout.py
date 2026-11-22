@@ -3,6 +3,8 @@ import json
 import os
 import platform
 import shutil
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -49,6 +51,43 @@ def _reveal(target):
 def _reachable(button):
     _reveal(button)
     return button.isVisible() and button.visibleRegion().contains(button.rect().adjusted(1, 1, -1, -1))
+
+
+def _run_confirmed_preprocessing(window, qapp):
+    # Cocoa sheets can suppress the title and do not always appear as
+    # activeModalWidget(). Select the Yes button by its platform-neutral role.
+    def confirm():
+        candidates = [qapp.activeModalWidget(), *qapp.topLevelWidgets()]
+        for dialog in candidates:
+            if dialog is None or not dialog.isVisible() or dialog.parentWidget() is not window:
+                continue
+            if isinstance(dialog, QMessageBox):
+                button = dialog.button(QMessageBox.Yes)
+            else:
+                buttons = dialog.findChild(QDialogButtonBox)
+                button = buttons.button(QDialogButtonBox.Yes) if buttons else None
+            if button is not None:
+                button.click()
+                return
+
+    def timeout():
+        # A native modal event loop can block a Qt timeout. End this opt-in
+        # acceptance process with a diagnostic instead of stalling a CI worker.
+        print("Timed out after 60 seconds waiting for the preprocessing confirmation dialog",
+              file=sys.stderr, flush=True)
+        os._exit(124)
+
+    timer = QTimer(window)
+    timer.timeout.connect(confirm)
+    timer.start(30)
+    deadline = threading.Timer(60, timeout)
+    deadline.daemon = True
+    deadline.start()
+    try:
+        window.step_pre()
+    finally:
+        deadline.cancel()
+        timer.stop()
 
 
 def _legend_geometry(view):
@@ -166,23 +205,7 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
     for page, step in enumerate((window.step_read, window.step_pre, window.step_peth, window.step_events)):
         window.tabs.setCurrentIndex(page)
         if page == 1:
-            def confirm():
-                dialog = qapp.activeModalWidget()
-                if dialog is None or dialog.windowTitle() != window.t("pre_confirm_title"):
-                    return
-                if isinstance(dialog, QMessageBox):
-                    button = dialog.button(QMessageBox.Yes)
-                else:
-                    button = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Yes)
-                button.click()
-
-            timer = QTimer(window)
-            timer.timeout.connect(confirm)
-            timer.start(30)
-            try:
-                step()
-            finally:
-                timer.stop()
+            _run_confirmed_preprocessing(window, qapp)
         else:
             step()
         qtbot.waitUntil(lambda: not window._busy, timeout=90000)
@@ -199,7 +222,13 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             width = min(width, available.width() - margins.left() - margins.right() - 12)
             height = min(height, available.height() - margins.top() - margins.bottom() - 12)
         window.move(available.x() + 6, available.y() + 6)
-        window.resize(width, height)
+        if compact:
+            window.resize(width, height)
+        else:
+            # The Windows window manager clamps an ordinary resize to its work
+            # area. Request the exact native surface to render the large desktop
+            # layout; QWidget.grab also captures its part beyond the monitor.
+            window.setFixedSize(width, height)
         qtbot.wait(150)
         prefix = f"{backend}-{lang}-{requested[0]}x{requested[1]}"
         report = dict(platform=platform.platform(), qt=qVersion(), backend=backend, language=lang,
@@ -244,6 +273,7 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             if views:
                 _reveal(getattr(window, views[0]))
             shot = window.grab()
+            assert shot.deviceIndependentSize().toSize() == window.size()
             assert shot.save(str(artifacts / f"{prefix}-{page}.png"))
             report["pages"][page] = dict(canvases=canvases, reachable=reach, widget_text=measurements)
         report["errors"] = issues
