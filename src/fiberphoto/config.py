@@ -142,6 +142,7 @@ class PipelineConfig:
     abet_by_recording: dict[str, AbetConfig] = field(default_factory=dict)
     intervals_by_recording: dict[str, dict] = field(default_factory=dict)
     manual_ttl_by_recording: dict[str, list[float]] = field(default_factory=dict)  # acquisition seconds in click order
+    figure_edits_by_recording: dict[str, dict] = field(default_factory=dict)
 
     def for_recording(self, path: str | Path | None, raw=None) -> "PipelineConfig":
         overrides = self.intervals_by_recording.get(str(Path(path).resolve())) if path else None
@@ -158,6 +159,9 @@ class PipelineConfig:
     def to_dict(self) -> dict:
         params = asdict(self)
         params["peth"] = self.peth.parameters()
+        params["figure_edits_by_recording"] = {
+            path: {view: changes for view, changes in views.items() if changes}
+            for path, views in self.figure_edits_by_recording.items() if any(views.values())}
         return params
 
     @classmethod

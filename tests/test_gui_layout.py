@@ -24,8 +24,8 @@ from fiberphoto.sample_data import make_sample_dataset
 PAGES = (
     ("read", ["b_read", "b_abet", "b_exclude", "b_marker_file", "b_marker_clear", "fs_edit"], ["fig_raw"]),
     ("pre", ["b_pre", "b_choose_windows"], ["fig_dedrift", "fig_deconv"]),
-    ("peth", ["b_peth", "b_abet_compare"], ["fig_peth", "fig_peth_dff", "fig_auc"]),
-    ("events", ["b_events", "b_export_events"], ["fig_events", "fig_dist", "fig_rate"]),
+    ("peth", ["b_peth", "b_abet_compare", "b_export_peth_plot_data"], ["fig_peth", "fig_peth_dff", "fig_auc"]),
+    ("events", ["b_events", "b_export_events", "b_export_event_plot_data"], ["fig_events", "fig_dist", "fig_rate"]),
     ("export", ["b_export", "b_batch", "b_manifest", "b_manifest_template"], []),
 )
 
@@ -152,7 +152,9 @@ def _legend_geometry(view):
         bottom = canvas_origin.y() + (frame.y1 - ax.bbox.y0) / dpr
         visible_axes.append([max(0., min(right, viewport.width()) - max(left, 0.)),
                              max(0., min(bottom, viewport.height()) - max(top, 0.))])
-    return {"canvas_px": list(frame.bounds), "legends": result,
+    overflow = [max(0, canvas.width() - viewport.width()),
+                max(0, canvas.height() - viewport.height())]
+    return {"canvas_px": list(frame.bounds), "legends": result, "overflow_dip": overflow,
             "viewport_dip": [viewport.width(), viewport.height()],
             "visible_axes_dip": visible_axes}, errors
 
@@ -294,6 +296,8 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
     window.out_dir.setText(str(tmp_path / "export"))
     with qtbot.waitExposed(window):
         window.show()
+    assert not window.b_export_peth_plot_data.isEnabled()
+    assert not window.b_export_event_plot_data.isEnabled()
     for page, step in enumerate((window.step_read, window.step_pre, window.step_peth, window.step_events)):
         window.tabs.setCurrentIndex(page)
         if page == 1:
@@ -302,6 +306,8 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             step()
         qtbot.waitUntil(lambda: not window._busy, timeout=90000)
         assert not errors, errors
+        assert window.b_export_peth_plot_data.isEnabled() == (window.peth is not None)
+        assert window.b_export_event_plot_data.isEnabled() == (window.events is not None)
     assert len(window.A.abet_marker_names) >= 6
     assert window.peth is not None and window.events is not None
     available = window.screen().availableGeometry()
@@ -311,6 +317,7 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
     # thus gives the application a 1264×640 client, not 1920×1080 logical pixels.
     scale = window.devicePixelRatioF()
     desktop = (round(1920 / scale) - 16, round(1080 / scale) - 80)
+    host = None
     for scenario, requested in (("available", (1024, 720)), ("compact", (980, 680)),
                                 ("1080p", desktop), ("large", (1400, 900))):
         compact = scenario == "available"
@@ -318,30 +325,31 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
         if compact:
             width = min(width, available.width() - margins.left() - margins.right() - 12)
             height = min(height, available.height() - margins.top() - margins.bottom() - 12)
-        window.move(available.x() + 6, available.y() + 6)
+        fits_screen = (width + margins.left() + margins.right() + 12 <= available.width()
+                       and height + margins.top() + margins.bottom() + 12 <= available.height())
+        if host is None and not fits_screen and not compact:
+            # Cocoa constrains top-level windows to the physical monitor. Attach
+            # the actual window to one native scroll host before applying a larger
+            # size. Repeatedly making it a top-level NSWindow between targets
+            # queues stale height changes at fractional display scales.
+            host = QScrollArea()
+            qtbot.addWidget(host)
+            host.setWidgetResizable(False)
+            host.resize(available.width() - margins.left() - margins.right() - 12,
+                        available.height() - margins.top() - margins.bottom() - 12)
+            window.hide()
+            window.setParent(host.viewport(), Qt.Widget)
+            host.setWidget(window)
+            window.show()
+            with qtbot.waitExposed(host):
+                host.show()
+        if host is None:
+            window.move(available.x() + 6, available.y() + 6)
         if compact:
             window.resize(width, height)
         else:
             window.setFixedSize(width, height)
         qtbot.wait(150)
-        host = None
-        if not compact and (width > available.width() or height > available.height()
-                            or (window.width(), window.height()) != (width, height)):
-            # Cocoa can cap even a fixed-size top-level window at the physical
-            # monitor height. A fixed-size child of a native scroll window keeps
-            # the production layout at its actual target dimensions.
-            host = QScrollArea()
-            qtbot.addWidget(host)
-            host.resize(min(width, available.width() - margins.left() - margins.right() - 12),
-                        min(height, available.height() - margins.top() - margins.bottom() - 12))
-            window.hide()
-            window.setParent(host.viewport(), Qt.Widget)
-            host.setWidget(window)
-            window.setFixedSize(width, height)
-            window.show()
-            with qtbot.waitExposed(host):
-                host.show()
-            qtbot.wait(150)
         prefix = f"{backend}-{lang}-{scenario}-{requested[0]}x{requested[1]}"
         report = dict(platform=platform.platform(), qt=qVersion(), backend=backend, language=lang,
                       dpr=window.devicePixelRatioF(), logical_dpi=window.screen().logicalDotsPerInch(),
@@ -422,6 +430,10 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
                 if not view.isVisibleTo(window):
                     issues.append(f"{page}/{name}: graph cannot be opened")
                 geometry, collisions = _legend_geometry(view)
+                if full_desktop and any(geometry["overflow_dip"]):
+                    collisions.append(f"graph requires scrolling by {geometry['overflow_dip']} DIP")
+                if collisions:
+                    assert window.grab().save(str(artifacts / f"{prefix}-{page}-{name}.png"))
                 _, clipped = _content_geometry(window)
                 issues.extend(f"{page}/{name}: {reason}" for reason in clipped)
                 canvases[name] = geometry
@@ -447,11 +459,8 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
         report["passed"] = not issues
         (artifacts / f"{prefix}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         failures.extend(f"{prefix}: {issue}" for issue in issues)
-        if host is not None:
-            # qtbot owns both widgets for teardown. Disown the main window
-            # before destroying its temporary native scroll area.
-            host.takeWidget()
-            host.close()
-            window.setParent(None, Qt.Window)
-            window.show()
+    if host is not None:
+        # qtbot owns both widgets for teardown.
+        host.takeWidget()
+        host.close()
     assert not failures, "\n".join(failures)

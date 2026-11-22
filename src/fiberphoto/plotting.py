@@ -132,7 +132,8 @@ def fig_raw(a: RawData, lang: str = "zh") -> Figure:
                 continue
             col = MARKER_COLORS[k % len(MARKER_COLORS)]
             for i, t in enumerate(on):
-                ax.axvline(t, color=col, lw=0.6, alpha=0.5, label=label if i == 0 else None)
+                ax.axvline(t, color=col, lw=0.6, alpha=0.5, label=label if i == 0 else None,
+                           gid=f"raw-marker-{label}")
     update_manual_ttl_overlay(axes, a)
     axes[-1].set_xlabel(tr("time_s", lang))
     axes[0].set_title(tr("raw_title", lang), loc="left")
@@ -283,6 +284,10 @@ def fig_peth_comparisons(p: PethResult, lang: str = "zh", *, kind=None, metric="
         unit = "z" if scale == "z" else p.dff_unit
         name = tr("auc" if measure == "auc" else f"peak_{p.peak_direction}", lang)
         ylabel = f"{name} ({unit} · s)" if measure == "auc" else f"{name} ({unit})"
+        if kind and measure == "peak" and lang == "en":
+            # The title already identifies the peak direction. Keep the shared
+            # preview's vertical label short enough for two stacked panels.
+            ylabel = f"Peak ({unit})"
         stats = paired_test(pre, post)
         title = name if kind else _kind_label(scale, p.dff_unit, lang)
         _paired_plot(ax, pre, post, lang, ylabel, title, stats, labels=("baseline_win", "target_win"))
@@ -298,12 +303,10 @@ def fig_auc(p: PethResult, lang: str = "zh", vertical: bool = False) -> Figure:
 def fig_event_distributions(ev: EventResult, lang: str = "zh", unit: str = "%") -> Figure:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 3), layout="constrained")
     e = ev.events
-    if len(e):
-        ax1.hist(e["amplitude"], bins=min(30, max(5, len(e) // 3)), color=C_SIGNAL,
-                 edgecolor="white", lw=0.8)
-    if len(e) > 1:
-        ax2.hist(e["iei_s"].dropna(), bins=min(30, max(5, len(e) // 3)), color=C_DENOISED,
-                 edgecolor="white", lw=0.8)
+    for ax, col, color in ((ax1, "amplitude", C_SIGNAL), (ax2, "iei_s", C_DENOISED)):
+        values = e[col].dropna() if col in e else []
+        if len(values):
+            ax.hist(values, bins=event_histogram_bins(len(e)), color=color, edgecolor="white", lw=0.8)
     unit_txt = tr("zscore", lang) if unit == "z" else f"ΔF/F {unit}"
     ax1.set_xlabel(f"{tr('amplitude', lang)} ({unit_txt})")
     ax1.set_ylabel(tr("count", lang))
@@ -311,6 +314,10 @@ def fig_event_distributions(ev: EventResult, lang: str = "zh", unit: str = "%") 
     ax2.set_xlabel(tr("iei_s", lang))
     ax2.set_title(tr("iei_hist", lang), loc="left")
     return fig
+
+
+def event_histogram_bins(event_count):
+    return min(30, max(5, event_count // 3))
 
 
 def fig_event_rate(stim_df, stats: Optional[dict] = None, lang: str = "zh") -> Figure:

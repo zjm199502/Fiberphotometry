@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.backend_bases import MouseButton
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from PySide6.QtCore import QObject, QRunnable, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout,
                                QLabel, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
@@ -174,6 +174,8 @@ class ParamForm(QWidget):
 class PreviewCanvas(FigureCanvasQTAgg):
     """Direct manipulation in display coordinates, including log and inverted axes."""
 
+    editRequested = Signal(object)
+
     def __init__(self, figure):
         super().__init__(figure)
         self.interactive_preview = False
@@ -189,8 +191,8 @@ class PreviewCanvas(FigureCanvasQTAgg):
         self.mpl_connect("motion_notify_event", self._move)
         self.mpl_connect("button_release_event", self._release)
         self.mpl_connect("scroll_event", self._scroll)
-        self.setToolTip("左键或中键平移，右键拖动缩放，滚轮缩放，Home 恢复全图。\n"
-                        "Left/middle drag to pan, right drag to scale, scroll to zoom. Home resets.")
+        self.setToolTip("双击编辑文字或颜色。左键或中键平移，右键拖动缩放，滚轮缩放，Home 恢复全图。\n"
+                        "Double-click to edit text or colors. Left/middle drag to pan, right drag to scale, scroll to zoom.")
 
     def draw(self):
         engine = self.figure.get_layout_engine()
@@ -232,6 +234,10 @@ class PreviewCanvas(FigureCanvasQTAgg):
         return None
 
     def _press(self, event):
+        if event.dblclick and event.button == MouseButton.LEFT and self.toolbar and not self.toolbar.mode and self.widgetlock.available(self):
+            self._drag = None
+            self.editRequested.emit(event)
+            return
         if self.toolbar and self.toolbar.mode == "pan/zoom" and event.inaxes is not None:
             self._settle.stop()
             self._preview_frame()
@@ -304,12 +310,17 @@ class PreviewCanvas(FigureCanvasQTAgg):
 class FigureView(QWidget):
     """A matplotlib figure with the zoom/pan toolbar; the figure can be swapped."""
 
+    previewSizeChanged = Signal()
+
     def __init__(self, parent=None, placeholder: str = ""):
         super().__init__(parent)
         self.lay = QVBoxLayout(self)
         self.lay.setContentsMargins(0, 0, 0, 0)
         self.canvas = None
         self.toolbar = None
+        self.plot_size = QSize()
+        self.figure_edits = {}
+        self.edit_language = "zh"
         self.placeholder = QLabel(placeholder)
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setWordWrap(True)
@@ -335,10 +346,15 @@ class FigureView(QWidget):
             old.deleteLater()
         self.canvas = self.toolbar = None
         if fig is None:
+            self.plot_size = QSize()
             self.scroll.hide()
             self.placeholder.show()
+            self.previewSizeChanged.emit()
             return
         self.placeholder.hide()
+        from ..figure_style import apply_figure_edits
+        from .figure_editor import edit_figure
+        apply_figure_edits(fig, self.figure_edits)
         self.canvas = PreviewCanvas(fig)
         # Keep tick labels, legends and data readable even in a compact splitter pane.
         # These sizes are Qt logical pixels, independent of the backing display scale.
@@ -353,13 +369,39 @@ class FigureView(QWidget):
         for legend in fig.legends:
             width = max(width, round(legend.get_window_extent(renderer).width /
                                      self.canvas.device_pixel_ratio) + 20)
-        self.canvas.setMinimumSize(width, max(195, round(77 * fig.get_figheight())))
+        self.plot_size = QSize(width, max(195, round(77 * fig.get_figheight())))
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        edit = self.toolbar.addAction("Edit" if self.edit_language == "en" else "编辑")
+        edit.setToolTip("Edit figure text and colors" if self.edit_language == "en" else "编辑图中文字和颜色")
+        edit.triggered.connect(lambda: edit_figure(self))
+        self.canvas.editRequested.connect(lambda event: edit_figure(self, event))
         self.toolbar.setIconSize(self.toolbar.iconSize() * 0.8)
         self.lay.insertWidget(0, self.toolbar)
         self.scroll.setWidget(self.canvas)
         self.scroll.show()
+        self._fit_canvas()
+        self.previewSizeChanged.emit()
         self.canvas.draw_idle()
+
+    def preferredPaneSize(self):
+        if not self.canvas:
+            return self.minimumSizeHint()
+        return self.plot_size + QSize(0, self.toolbar.sizeHint().height() + self.lay.spacing())
+
+    def _fit_canvas(self):
+        if self.canvas is None or self.toolbar is None:
+            return
+        # Choose split panes using the preferred size first. A single visible
+        # chart may be slightly shorter; Matplotlib reflows its constrained layout.
+        available = self.height() - self.toolbar.sizeHint().height() - self.lay.spacing()
+        minimum_height = self.plot_size.height()
+        if available >= 250:
+            minimum_height = min(minimum_height, available)
+        self.canvas.setMinimumSize(self.plot_size.width(), minimum_height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_canvas()
 
 
 class WorkerSignals(QObject):

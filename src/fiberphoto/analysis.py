@@ -154,6 +154,7 @@ class EventResult:
     threshold: float           # on the denoised trace ("peak") or on the spike train ("oasis")
     noise_sigma: float
     method: str = "peak"
+    settings: EventConfig | None = None
 
     def to_csv(self, path, unit: str):
         """Export the measured events without repeating detection."""
@@ -177,8 +178,11 @@ def _area(c, baseline, left, right):
 
 def detect_events(c: DeconvData, b: DffData, cfg: EventConfig) -> EventResult:
     if cfg.method == "oasis":
-        return detect_spike_events(c, cfg)
-    return detect_peak_events(c, b, cfg)
+        result = detect_spike_events(c, cfg)
+    else:
+        result = detect_peak_events(c, b, cfg)
+    result.settings = replace(cfg)
+    return result
 
 
 def spike_threshold(c: DeconvData, cfg: EventConfig) -> tuple[float, float]:

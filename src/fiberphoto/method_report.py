@@ -319,7 +319,7 @@ def write_method_report(res, cfg):
     key = str(Path(a.source).resolve())
     for mapping in [configured["channels"]["excluded_channels"], configured["behavior_by_recording"],
                     configured["intervals_by_recording"], configured["manual_ttl_by_recording"],
-                    configured["abet_by_recording"]]:
+                    configured["abet_by_recording"], configured["figure_edits_by_recording"]]:
         for other in list(mapping):
             if other != key:
                 del mapping[other]

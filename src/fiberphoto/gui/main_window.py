@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(split, 1)
         self.setCentralWidget(center)
         self._short_window = None
+        self._compact_navigation = None
         screen = self.screen().availableGeometry()
         self.resize(min(1400, int(screen.width() * .97)), min(900, int(screen.height() * .92)))
 
@@ -142,10 +143,13 @@ class MainWindow(QMainWindow):
         compact_read = event.size().width() < max(1080, 68 * self.fontMetrics().height())
         self.baseline_picker.set_compact(compact_read or self.lang == "en")
         short = event.size().height() < 540
+        compact_navigation = short or narrow
+        if compact_navigation != self._compact_navigation:
+            self._compact_navigation = compact_navigation
+            style_tabs(self.tabs, workflow=True, compact=compact_navigation)
         if short != self._short_window:
             self._short_window = short
             self.log_dock.setVisible(not short)
-            style_tabs(self.tabs, workflow=True, compact=short or narrow)
             style_tabs(self.peth_views, compact=short)
             for label, help_button in self.page_help:
                 label.setVisible(not short)
@@ -161,7 +165,8 @@ class MainWindow(QMainWindow):
         # File-specific association maps are shared by the open session. Snapshot
         # just this view's settings; large analysis arrays are retained by reference.
         local = replace(cfg, channels=replace(cfg.channels, excluded_channels={}),
-                        behavior_by_recording={}, abet_by_recording={}, intervals_by_recording={}, manual_ttl_by_recording={})
+                        behavior_by_recording={}, abet_by_recording={}, intervals_by_recording={}, manual_ttl_by_recording={},
+                        figure_edits_by_recording={})
         self.recording_states[self.current] = RecordingViewState(
             deepcopy(local), (self.A, self.B, self.C, self.peth, self.events, self.stim_events),
             self.channel_infos, self.previews, self.tabs.currentIndex(),
@@ -173,7 +178,8 @@ class MainWindow(QMainWindow):
                        behavior_by_recording=self.cfg.behavior_by_recording,
                        abet_by_recording=self.cfg.abet_by_recording,
                        intervals_by_recording=self.cfg.intervals_by_recording,
-                       manual_ttl_by_recording=self.cfg.manual_ttl_by_recording)
+                       manual_ttl_by_recording=self.cfg.manual_ttl_by_recording,
+                       figure_edits_by_recording=self.cfg.figure_edits_by_recording)
 
     def _restore_recording(self, state):
         self.cfg = self._view_config(state.config)
@@ -424,7 +430,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         self.read_panels = ResponsivePanels(split, [controls, self.fig_raw],
                                            [("通道与选区", "Channels and intervals"), ("原始预览", "Raw preview")],
-                                           min_width=790, fit_contents=True)
+                                           min_width=790, fit_contents=True, fit_plots=True)
         v.addWidget(self.read_panels, 1)
         return w
 
@@ -472,7 +478,7 @@ class MainWindow(QMainWindow):
         right.addWidget(self.fig_deconv)
         plots = ResponsivePanels(right, [self.fig_dedrift, self.fig_deconv],
                                  [("ΔF/F", "ΔF/F"), ("反卷积", "Deconvolution")],
-                                 min_width=515, min_height=440)
+                                 min_width=515, min_height=440, fit_plots=True)
         self.pre_panels = self._analysis_panels(left, plots)
         v.addWidget(self.pre_panels, 1)
         return w
@@ -505,7 +511,11 @@ class MainWindow(QMainWindow):
         trials_layout = QVBoxLayout(trials)
         trials_layout.setContentsMargins(3, 3, 3, 3)
         trials_layout.addWidget(self.trial_table, 1)
-        trials_layout.addWidget(self.b_abet_compare)
+        trial_actions = QHBoxLayout()
+        self.b_export_peth_plot_data = QPushButton(clicked=lambda: self.export_plot_data("peth"))
+        trial_actions.addWidget(self.b_abet_compare)
+        trial_actions.addWidget(self.b_export_peth_plot_data)
+        trials_layout.addLayout(trial_actions)
         self.peth_settings = SectionTabs([(timing, ("刺激与基线", "Stimulus and baseline")),
                                          (self.form_peth.sections[0], ("响应", "Response")),
                                          (trials, ("试次", "Trials"))])
@@ -526,7 +536,7 @@ class MainWindow(QMainWindow):
         right.setSizes([560, 340])
         plots = ResponsivePanels(right, [self.peth_views, self.fig_auc],
                                  [("刺激锁定", "Peri-event"), ("分组统计", "Group statistics")],
-                                 min_width=680, min_height=320)
+                                 min_width=680, min_height=320, fit_plots=True)
         self.peth_panels = self._analysis_panels(left, plots)
         v.addWidget(self.peth_panels, 1)
         return w
@@ -555,7 +565,11 @@ class MainWindow(QMainWindow):
         event_layout.addWidget(self.lbl_events)
         event_layout.addWidget(self.event_table, 1)
         self.b_export_events = QPushButton(clicked=self.export_event_table)
-        event_layout.addWidget(self.b_export_events)
+        event_actions = QHBoxLayout()
+        self.b_export_event_plot_data = QPushButton(clicked=lambda: self.export_plot_data("events"))
+        event_actions.addWidget(self.b_export_events)
+        event_actions.addWidget(self.b_export_event_plot_data)
+        event_layout.addLayout(event_actions)
         self.event_settings = SectionTabs([(self.form_events, ("检测参数", "Detection")),
                                           (event_list, ("事件列表", "Events table"))])
         lv.addWidget(self.event_settings, 1)
@@ -575,7 +589,7 @@ class MainWindow(QMainWindow):
         right.addWidget(bottom)
         plots = ResponsivePanels(right, [self.fig_events, self.fig_dist, self.fig_rate],
                                  [("事件波形", "Events"), ("分布", "Distributions"), ("频率", "Rates")],
-                                 min_width=680, min_height=445)
+                                 min_width=680, min_height=445, fit_plots=True)
         self.event_panels = self._analysis_panels(left, plots)
         v.addWidget(self.event_panels, 1)
         return w
@@ -683,6 +697,8 @@ class MainWindow(QMainWindow):
 
     def retranslate(self):
         t = self.t
+        self.baseline_picker.set_compact(self.width() < max(1080, 68 * self.fontMetrics().height())
+                                         or self.lang == "en")
         self.setWindowTitle(f"FiberLume {__version__} · {t('app_title')}")
         self._sync_lang_controls()
         self.m_file.setTitle(t("menu_file"))
@@ -761,6 +777,9 @@ class MainWindow(QMainWindow):
         # tab 4
         self.b_events.setText(t("btn_events"))
         self.b_export_events.setText(t("export_event_table"))
+        for button in (self.b_export_peth_plot_data, self.b_export_event_plot_data):
+            button.setText(t("export_plot_data"))
+            button.setToolTip(t("export_plot_data_tip"))
         self._show_event_summary()
         # tab 5
         for lab, k in zip(self.lbl_out, ("lbl_outdir", "lbl_formats", "lbl_dpi", "lbl_fig_lang", "lbl_csv")):
@@ -1664,6 +1683,7 @@ class MainWindow(QMainWindow):
             self.fig_auc.set_figure(None)
             return
         kind = "z" if self.peth_views.currentIndex() == 0 else "dff"
+        self._bind_figure_edits(self.fig_auc, f"paired_{kind}")
         fig = plotting.fig_peth_comparisons(self.peth, self.lang, kind=kind)
         plt.close(fig)
         self.fig_auc.set_figure(fig)
@@ -1719,7 +1739,45 @@ class MainWindow(QMainWindow):
                 return
             self.log(self.t("export_done", path=path))
 
+    def export_plot_data(self, page):
+        from ..plot_data import capture_views, export_plot_bundle
+
+        if self._busy or self.A is None or self.B is None or self.current is None:
+            return
+        if page == "peth":
+            if self.peth is None:
+                return
+            views = dict(peth_native=self.fig_peth_dff, peth_z=self.fig_peth, comparisons=self.fig_auc)
+            results = dict(peth=self.peth)
+        else:
+            if self.events is None or self.C is None:
+                return
+            views = dict(event_trace=self.fig_events, distributions=self.fig_dist, rates=self.fig_rate)
+            overlays = []
+            if self.fig_events.canvas is not None:
+                for collection in self.fig_events.canvas.figure.axes[0].collections:
+                    if collection.get_gid() == "stimulus-times":
+                        overlays = [segment[0, 0] for segment in collection.get_segments()]
+            results = dict(events=self.events, deconv=self.C, comparisons=self.stim_events, overlays=overlays)
+        target = self.current.with_name(f"{self.current.stem}_{page}_plot_data.zip")
+        path, _ = QFileDialog.getSaveFileName(self, self.t("export_plot_data"), str(target), "ZIP (*.zip)")
+        if not path:
+            return
+        try:
+            captured = capture_views(views)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.error(str(exc))
+            return
+        raw, processed = self.A, self.B
+        self._run(lambda: export_plot_bundle(path, raw, processed, captured, **results),
+                  lambda _: self.log(self.t("export_done", path=path)))
+
     # -------------------------------------------------------------- figures
+    def _bind_figure_edits(self, view, key):
+        view.edit_language = self.lang
+        edits = self.cfg.figure_edits_by_recording.setdefault(str(self.current.resolve()), {}) if self.current else {}
+        view.figure_edits = edits.setdefault(key, {})
+
     def redraw_all(self):
         """Rebuild every figure from the current results, in the interface language."""
         self._sync_behavior()
@@ -1727,6 +1785,11 @@ class MainWindow(QMainWindow):
         lang = self.lang
         plotting.setup_style(lang)
         cfg = self.cfg
+        for view, key in ((self.fig_raw, "01_raw_dataA"), (self.fig_dedrift, "02_dedrift_dataB"),
+                          (self.fig_deconv, "preview_deconvolution"), (self.fig_events, "03_deconv_events_dataC"),
+                          (self.fig_peth, "04_peth_heatmap_z"), (self.fig_peth_dff, "04_peth_heatmap_dff"),
+                          (self.fig_dist, "06_event_distributions"), (self.fig_rate, "07_event_rate_pre_post")):
+            self._bind_figure_edits(view, key)
         # Full-trace overlays include stimuli even when a peri-event trial is dropped.
         onsets = (configured_markers(self.A, cfg.peth, processed=self.B).times
                   if self.A is not None else ())
@@ -1884,6 +1947,8 @@ class MainWindow(QMainWindow):
         self._update_clear_buttons()
 
     def _update_clear_buttons(self):
+        self.b_export_peth_plot_data.setEnabled(self.peth is not None and self.B is not None and not self._busy)
+        self.b_export_event_plot_data.setEnabled(self.events is not None and self.C is not None and not self._busy)
         aligned = getattr(self.A, "abet", None)
         self.b_abet_compare.setEnabled(self.B is not None and aligned is not None and not self._busy)
         ready = {"read": self.A is not None, "pre": self.B is not None,

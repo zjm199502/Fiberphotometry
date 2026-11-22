@@ -248,6 +248,8 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
                                 abet_by_recording={key: cfg.abet_by_recording[key]} if key in cfg.abet_by_recording else
                                 ({key: AbetConfig(path=str(a.abet.session.path))} if a.abet is not None else {}),
                                 intervals_by_recording={key: windows[key]} if key in windows else {},
+                                figure_edits_by_recording={key: cfg.figure_edits_by_recording[key]}
+                                if key in cfg.figure_edits_by_recording else {},
                                 manual_ttl_by_recording={key: cfg.manual_ttl_by_recording[key]}
                                 if key in cfg.manual_ttl_by_recording else {})
         recording_cfg.save(out / "parameters.json")
@@ -284,7 +286,12 @@ def export_figures(res: SessionResult, cfg: PipelineConfig) -> list[Path]:
     plotting.setup_style(lang)
     fig_dir = res.out_dir / "figures"
     saved: list[Path] = []
-    save = lambda fig, name: saved.extend(plotting.save_figure(fig, fig_dir / name, pc.formats, pc.dpi))
+    from .figure_style import apply_figure_edits
+    edits = cfg.figure_edits_by_recording.get(str(Path(res.A.source).resolve()), {}) if res.A is not None else {}
+
+    def save(fig, name):
+        apply_figure_edits(fig, edits.get(name))
+        saved.extend(plotting.save_figure(fig, fig_dir / name, pc.formats, pc.dpi))
     onsets = res.peth.onsets if res.peth is not None else ()
 
     if res.A is not None:

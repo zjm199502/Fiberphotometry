@@ -113,6 +113,9 @@ UI: dict[str, dict[str, str]] = {
     # tab 3
     "grp_peth": {"zh": "刺激锁定参数", "en": "Peri-event settings"},
     "btn_peth": {"zh": "运行刺激锁定分析", "en": "Run peri-event analysis"},
+    "export_plot_data": {"zh": "绘图数据包…", "en": "Plot data…"},
+    "export_plot_data_tip": {"zh": "导出当前结果的完整绘图数据、坐标、参考图和独立重绘脚本（ZIP）",
+                             "en": "Export the current plot data, axes, reference figures and standalone plotting script (ZIP)"},
     "lbl_marker_use": {"zh": "对齐的打标", "en": "Align to marker"},
     "trial_table": {"zh": "逐试次结果", "en": "Per-trial results"},
     "col_trial": {"zh": "试次", "en": "Trial"},

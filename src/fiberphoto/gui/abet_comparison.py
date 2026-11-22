@@ -23,6 +23,7 @@ def compare_abet(window):
         dialog.setWindowTitle("ABET trial comparison" if en else "ABET 行为分组比较")
         outer, layout = dialog_layout(dialog, 980, 720)
         view = FigureView()
+        window._bind_figure_edits(view, "abet_comparison")
         view.setMinimumHeight(10 * view.fontMetrics().height())
         view.set_figure(figure_abet_analysis(result, language))
         layout.addWidget(view, 1)
@@ -45,7 +46,8 @@ def compare_abet(window):
                     if QMessageBox.question(dialog, save.text(), question) != QMessageBox.Yes:
                         return
                 try:
-                    export_abet_analysis(result, out, language=language)
+                    export_abet_analysis(result, out, language=language, make_figures=False)
+                    view.canvas.figure.savefig(out / "overview.png", dpi=160)
                     window.log(str(out))
                 except OSError as exc:
                     window.error(str(exc))

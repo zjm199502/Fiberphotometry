@@ -1,6 +1,8 @@
 """Move the same live controls or figures between splitter panes and compact tabs."""
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtWidgets import QLayout, QStackedLayout, QTabWidget, QWidget
+
+from .widgets import FigureView
 
 
 # Apply these rules to individual navigation bars, not to editors or their children.
@@ -37,7 +39,7 @@ class SectionTabs(QTabWidget):
 
 
 class ResponsivePanels(QWidget):
-    def __init__(self, splitter, panels, labels, *, min_width, min_height=0, fit_contents=False):
+    def __init__(self, splitter, panels, labels, *, min_width, min_height=0, fit_contents=False, fit_plots=False):
         super().__init__()
         self.splitter = splitter
         self.panels = panels
@@ -46,6 +48,17 @@ class ResponsivePanels(QWidget):
         self.min_width = min_width
         self.min_height = min_height
         self.fit_contents = fit_contents
+        self.fit_plots = fit_plots
+        # Capture the original hierarchy before compact tabs reparent its figures.
+        # Events have a vertical splitter containing a second, horizontal one.
+        self.groups = {splitter: [splitter.widget(i) for i in range(splitter.count())]}
+        for pane in panels:
+            parent = pane.parentWidget()
+            if parent not in self.groups:
+                self.groups[parent] = [parent.widget(i) for i in range(parent.count())]
+        if fit_plots:
+            for view in splitter.findChildren(FigureView):
+                view.previewSizeChanged.connect(self._reflow, Qt.QueuedConnection)
         self.positions = [(panel.parentWidget(), panel.parentWidget().indexOf(panel)) for panel in panels]
         self.original_sizes = {}
         self.compact = QTabWidget()
@@ -73,12 +86,50 @@ class ResponsivePanels(QWidget):
         for i in range(self.compact.count()):
             self.compact.setTabText(i, self.labels[i][lang == "en"])
 
+    def _preferred(self, widget):
+        if isinstance(widget, FigureView):
+            return widget.preferredPaneSize()
+        if isinstance(widget, QTabWidget):
+            size = QSize()
+            for i in range(widget.count()):
+                size = size.expandedTo(self._preferred(widget.widget(i)))
+            return size + QSize(4, widget.tabBar().sizeHint().height() + 4)
+        if widget in self.groups:
+            children = [self._preferred(pane) for pane in self.groups[widget]]
+            handles = (len(children) - 1) * widget.handleWidth()
+            if widget.orientation() == Qt.Horizontal:
+                return QSize(sum(s.width() for s in children) + handles, max(s.height() for s in children))
+            return QSize(max(s.width() for s in children), sum(s.height() for s in children) + handles)
+        return widget.minimumSizeHint().expandedTo(widget.minimumSize())
+
+    def _fit_splitters(self):
+        for group, children in self.groups.items():
+            if group.count() != len(children) or not group.isVisible():
+                continue
+            horizontal = group.orientation() == Qt.Horizontal
+            needs = [self._preferred(pane) for pane in children]
+            needs = [size.width() if horizontal else size.height() for size in needs]
+            current = group.sizes()
+            if all(actual >= need for actual, need in zip(current, needs)):
+                continue
+            extra = sum(current) - sum(needs)
+            if extra >= 0:
+                # Preserve the user's split unless a chart needs more space.
+                surplus = [max(0, actual - need) for actual, need in zip(current, needs)]
+                total = sum(surplus)
+                group.setSizes([need + round(extra * part / total) for need, part in zip(needs, surplus)])
+
     def _reflow(self):
         minimum = self.min_height
         if self.fit_contents and self.splitter.orientation() == Qt.Vertical:
             minimum = max(minimum, sum(self._panel_heights()) + self.splitter.handleWidth())
         narrow = self.width() < self.min_width or self.height() < minimum
+        if self.fit_plots:
+            needed = self._preferred(self.splitter)
+            narrow = narrow or self.width() < needed.width() or self.height() < needed.height()
         if narrow == bool(self.compact.count()):
+            if self.fit_plots and not narrow:
+                self._fit_splitters()
             return
         if narrow:
             self.original_sizes = {parent: parent.sizes() for parent, _ in self.positions}
@@ -94,6 +145,8 @@ class ResponsivePanels(QWidget):
             for parent, sizes in self.original_sizes.items():
                 parent.setSizes(sizes)
             self.deck.setCurrentWidget(self.splitter)
+            if self.fit_plots:
+                QTimer.singleShot(0, self, self._fit_splitters)
         self.updateGeometry()
 
     def event(self, event):
@@ -105,6 +158,13 @@ class ResponsivePanels(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reflow()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.fit_plots:
+            # A hidden workflow page can be resized before its splitter
+            # receives its final geometry. Recheck after the tab is displayed.
+            QTimer.singleShot(0, self, self._reflow)
 
     def select(self, index):
         self.last_tab = index
