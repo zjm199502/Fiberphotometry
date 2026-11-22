@@ -11,6 +11,7 @@ jobs:
   layout:
     name: ${{ matrix.os }} at ${{ matrix.scale }}x
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:

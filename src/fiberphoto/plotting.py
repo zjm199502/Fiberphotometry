@@ -42,10 +42,10 @@ def setup_style(lang: str = "zh") -> None:
     import logging
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
     available = {f.name for f in font_manager.fontManager.ttflist}
-    family = [f for f in CJK_FONTS if f in available] if lang == "zh" else []
+    cjk = [f for f in CJK_FONTS if f in available]
+    family = cjk + ["DejaVu Sans"] if lang == "zh" else ["DejaVu Sans", *cjk]
     plt.rcParams.update({
-        "font.family": "sans-serif",
-        "font.sans-serif": family + ["DejaVu Sans", "Arial"],
+        "font.family": family,
         "axes.unicode_minus": False,
         "axes.spines.top": False,
         "axes.spines.right": False,
@@ -206,7 +206,7 @@ def _kind_label(kind: str, dff_unit: str, lang: str) -> str:
 def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=None, kind: str = "z") -> Figure:
     """Heatmap of every trial above the mean ± SEM trace; ``kind`` is "z" or "dff"."""
     trials = p.get(kind)
-    label = _kind_label(kind, p.dff_unit, lang)
+    label = tr("zscore", lang) if kind == "z" or p.dff_unit == "z" else f"ΔF/F ({p.dff_unit})"
     fig = plt.figure(figsize=(5.8, 6), layout="constrained")
     grid = fig.add_gridspec(2, 2, height_ratios=[1.2, 1], width_ratios=[25, 1])
     ax1 = fig.add_subplot(grid[0, 0])
@@ -260,7 +260,7 @@ def _paired_plot(ax, pre, post, lang, ylabel, title, stats: Optional[dict] = Non
     ax.set_ylabel(ylabel)
     p = (stats or {}).get("wilcoxon_p") if (stats or {}).get("n", 0) >= 3 else None
     if p is not None and not np.isnan(p):
-        title += f"\nWilcoxon p = {p:.3g}, n = {stats['n']}"
+        title += f"\nWilcoxon p = {p:.3g}\nn = {stats['n']}"
     ax.set_title(title, loc="left")
 
 
@@ -313,7 +313,7 @@ def fig_event_distributions(ev: EventResult, lang: str = "zh", unit: str = "%") 
 def fig_event_rate(stim_df, stats: Optional[dict] = None, lang: str = "zh") -> Figure:
     fig, ax = plt.subplots(figsize=(3.5, 3.6), layout="constrained")
     _paired_plot(ax, stim_df.get("pre_rate_per_min", []), stim_df.get("post_rate_per_min", []),
-                 lang, tr("rate", lang), tr("rate_title", lang), stats)
+                 lang, tr("rate", lang), fill(tr("rate_title", lang), 23), stats)
     return fig
 
 

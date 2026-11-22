@@ -240,6 +240,8 @@ def format_dff_formula(raw: RawData, result: DffData, lang: str = "zh") -> str:
     if result.method.startswith("Plexon "):
         column = result.method.removeprefix("Plexon ")
         label = "设备导出比值" if zh else "device-exported ratio"
+        if raw.abet_native is not None:
+            label = "重采样到 ABET 时钟的设备导出比值" if zh else "device ratio resampled onto the ABET clock"
         name = "X(t)" if window else "ΔF/F(t)"
         return f"{prefix}{name} = {column}(t) ({label}){centered}"
 

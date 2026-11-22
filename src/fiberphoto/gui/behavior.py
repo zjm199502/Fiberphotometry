@@ -5,9 +5,10 @@ import re
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QVBoxLayout)
+                               QPushButton)
 
 from ..behavior import BehaviorConfig, behavior_columns
+from .dialog_layout import dialog_layout
 
 
 class BehaviorDialog(QDialog):
@@ -15,8 +16,7 @@ class BehaviorDialog(QDialog):
         super().__init__(parent)
         self.lang = lang
         self.setWindowTitle(self.tr2("行为序列对齐", "Align behavior series"))
-        self.resize(490, 360)
-        layout = QVBoxLayout(self)
+        outer, layout = dialog_layout(self, 570, 460)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         layout.addLayout(form)
@@ -68,7 +68,7 @@ class BehaviorDialog(QDialog):
         self.buttons.button(QDialogButtonBox.Cancel).setText(self.tr2("取消", "Cancel"))
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
-        layout.addWidget(self.buttons)
+        outer.addWidget(self.buttons)
         self.time_col.currentIndexChanged.connect(self._time_changed)
         self.rate.valueChanged.connect(self._validate)
         self.value_col.currentIndexChanged.connect(self._validate)

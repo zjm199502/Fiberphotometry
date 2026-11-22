@@ -5,10 +5,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QLabel, QMessageBox, QPushButton, QWidget
+from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QWidget
 
 from .. import plotting
 from ..preprocess import signal_interval_baseline, signal_interval_slice
+from .dialog_layout import confirm_details
 
 
 COLORS = {"signal": "#277fac", "baseline": "#c78616"}
@@ -54,6 +55,25 @@ class BaselinePicker(QWidget):
         self.spans = {}
         self.temporary_raw = False
         self.previous_source = None
+        self.compact = False
+
+    def set_compact(self, compact):
+        if self.compact == compact:
+            return
+        self.compact = compact
+        row = self.layout()
+        for button in (self.ttl_button, self.undo_ttl, self.ttl_note, self.go_pre):
+            row.removeWidget(button)
+        if compact:
+            row.addWidget(self.ttl_button, 2, 0)
+            row.addWidget(self.undo_ttl, 2, 1)
+            row.addWidget(self.ttl_note, 2, 2)
+            row.addWidget(self.go_pre, 3, 0, 1, 3)
+        else:
+            row.addWidget(self.ttl_button, 0, 3)
+            row.addWidget(self.undo_ttl, 0, 4)
+            row.addWidget(self.ttl_note, 1, 3, 1, 2)
+            row.addWidget(self.go_pre, 0, 5, 2, 1)
 
     def tr2(self, zh, en):
         return zh if self.host.lang == "zh" else en
@@ -139,7 +159,6 @@ class BaselinePicker(QWidget):
         fig = plotting.fig_raw(raw, self.host.lang)
         fig.axes[0].set_xlim(xlim)
         plt.close(fig)
-        fig.set_layout_engine("tight")
         self.host.fig_raw.set_figure(fig)
         self.canvas = self.host.fig_raw.canvas
         self.spans.clear()
@@ -157,6 +176,7 @@ class BaselinePicker(QWidget):
             self.ttl_button.setChecked(False)
             note.setText(self.tr2("先关闭图表工具栏中的平移或缩放模式。", "Turn off toolbar pan or zoom first."))
             return
+        self.host.read_panels.select(1)
         names = raw.channel_names
         if kind == "baseline" and names.get("preview_signal") and names.get("preview_signal") == names.get("exported_dff"):
             self._show_raw(True)
@@ -176,7 +196,7 @@ class BaselinePicker(QWidget):
                                ("button_release_event", self._release)):
             self.callbacks.append(self.canvas.mpl_connect(name, callback))
         self.refresh()
-        note.setText(self.tr2("在上方信号曲线上按住左键框选，或依次点击两个端点。", "Drag across the top signal plot, or click two endpoints."))
+        note.setText(self.tr2("在预览的信号曲线上按住左键框选，或依次点击两个端点。", "Drag across the signal trace in the preview, or click two endpoints."))
 
     def _ttl_key(self, event):
         if event.key == "escape":
@@ -244,8 +264,7 @@ class BaselinePicker(QWidget):
             self.stop()
             note.setText(str(exc).split(" / ")[0 if self.host.lang == "zh" else -1])
             return
-        if QMessageBox.question(self, self.tr2("确认选区", "Confirm interval"), message + "\n" + info,
-                                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes:
+        if confirm_details(self, self.tr2("确认选区", "Confirm interval"), message + "\n" + info):
             self.host._store_dedrift()
             fields[f"{self.kind}_start_s"].setValue(start)
             fields[f"{self.kind}_end_s"].setValue(end)

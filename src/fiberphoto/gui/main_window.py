@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PySide6.QtCore import QSettings, QSize, QStandardPaths, Qt, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWidget, QFileDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QBoxLayout, QCheckBox, QComboBox, QDockWidget, QFileDialog,
                                QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+                               QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QSpinBox, QSplitter, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
@@ -30,6 +30,8 @@ from ..abet_batch import find_abet_sidecar
 from .abet import AbetDialog
 from .behavior import BehaviorDialog
 from .event_table import EventTableModel
+from .responsive import ResponsivePanels
+from .dialog_layout import confirm_details
 from .baseline import BaselinePicker
 from ..preprocess import (DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula,
                           signal_interval_baseline)
@@ -95,18 +97,54 @@ class MainWindow(QMainWindow):
         self._build_log()
 
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(_scroll(self.files_box))
+        self.file_sidebar = _scroll(self.files_box)
+        split.addWidget(self.file_sidebar)
         split.setChildrenCollapsible(False)
         split.addWidget(self.tabs)
         split.setStretchFactor(1, 1)
         split.setSizes([240, 1160])
-        self.setCentralWidget(split)
+        center = QWidget()
+        layout = QVBoxLayout(center)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.file_compact = QWidget()
+        file_row = QHBoxLayout(self.file_compact)
+        file_row.setContentsMargins(4, 0, 4, 0)
+        self.file_combo = QComboBox()
+        self.file_combo.setModel(self.file_list.model())
+        self.file_combo.activated.connect(self.file_list.setCurrentRow)
+        self.file_list.currentRowChanged.connect(self.file_combo.setCurrentIndex)
+        self.file_menu_button = QPushButton()
+        menu = QMenu(self.file_menu_button)
+        menu.addActions([self.a_add, self.a_folder, self.a_sample])
+        self.a_compact_remove = menu.addAction("", self.remove_file)
+        self.file_menu_button.setMenu(menu)
+        file_row.addWidget(self.file_menu_button)
+        file_row.addWidget(self.file_combo, 1)
+        layout.addWidget(self.file_compact)
+        layout.addWidget(split, 1)
+        self.setCentralWidget(center)
+        self._short_window = None
         screen = self.screen().availableGeometry()
         self.resize(min(1400, int(screen.width() * .97)), min(900, int(screen.height() * .92)))
 
         self.forms_load()
         self.retranslate()
         self._update_enabled()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not hasattr(self, "file_compact"):
+            return
+        narrow = event.size().width() < max(860, 54 * self.fontMetrics().height())
+        self.file_compact.setVisible(narrow)
+        self.file_sidebar.setVisible(not narrow)
+        compact_read = event.size().width() < max(1080, 68 * self.fontMetrics().height())
+        self.read_groups.setDirection(QBoxLayout.TopToBottom if compact_read else QBoxLayout.LeftToRight)
+        self.baseline_picker.set_compact(compact_read or self.lang == "en")
+        short = event.size().height() < 540
+        if short != self._short_window:
+            self._short_window = short
+            self.log_dock.setVisible(not short)
 
     # ------------------------------------------------------------------ state
     def _reset_results(self):
@@ -230,6 +268,17 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(_scroll(self._tab_events()), "")
         self.tabs.addTab(_scroll(self._tab_export()), "")
 
+    def _analysis_panels(self, controls, plots):
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+        form = _scroll(controls)
+        split.addWidget(form)
+        split.addWidget(plots)
+        split.setStretchFactor(1, 1)
+        split.setSizes([400, 760])
+        return ResponsivePanels(split, [form, plots], [("参数", "Parameters"), ("结果图", "Plots")],
+                                min_width=max(840, 56 * self.fontMetrics().height()), min_height=320)
+
     # tab ① ----------------------------------------------------------------
     def _tab_read(self):
         w = QWidget()
@@ -261,6 +310,7 @@ class MainWindow(QMainWindow):
 
         top = QWidget()
         h = QHBoxLayout(top)
+        self.read_groups = h
         h.setContentsMargins(0, 0, 0, 0)
         self.chan_box = QGroupBox()
         cl = QVBoxLayout(self.chan_box)
@@ -270,7 +320,8 @@ class MainWindow(QMainWindow):
         self.chan_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.chan_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         self.chan_table.setIconSize(QSize(160, 30))
-        self.chan_table.verticalHeader().setDefaultSectionSize(34)
+        self.chan_table.verticalHeader().setDefaultSectionSize(max(34, self.fontMetrics().height() + 8))
+        self.chan_table.setMinimumHeight(6 * self.fontMetrics().height())
         self.chan_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         cl.addWidget(self.chan_table)
         exclusions = QHBoxLayout()
@@ -284,6 +335,7 @@ class MainWindow(QMainWindow):
 
         self.map_box = QGroupBox()
         f = QFormLayout(self.map_box)
+        f.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.cb_group = QComboBox()
         self.cb_group.currentIndexChanged.connect(self._fill_channel_combos)
         self.cb_signal = QComboBox()
@@ -343,7 +395,10 @@ class MainWindow(QMainWindow):
         split.addWidget(self.fig_raw)
         self.fig_raw.setMinimumHeight(14 * self.fontMetrics().height())
         split.setSizes([340, 400])
-        v.addWidget(split, 1)
+        self.read_panels = ResponsivePanels(split, [top_panel, self.fig_raw],
+                                           [("通道与选区", "Channels and intervals"), ("原始预览", "Raw preview")],
+                                           min_width=790, min_height=430)
+        v.addWidget(self.read_panels, 1)
         return w
 
     # tab ② ----------------------------------------------------------------
@@ -379,14 +434,11 @@ class MainWindow(QMainWindow):
         right.setChildrenCollapsible(False)
         right.addWidget(self.fig_dedrift)
         right.addWidget(self.fig_deconv)
-        split = QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(False)
-        controls = _scroll(left)
-        controls.setMinimumWidth(14 * self.fontMetrics().height())
-        split.addWidget(controls)
-        split.addWidget(right)
-        split.setSizes([380, 900])
-        v.addWidget(split, 1)
+        plots = ResponsivePanels(right, [self.fig_dedrift, self.fig_deconv],
+                                 [("ΔF/F", "ΔF/F"), ("反卷积", "Deconvolution")],
+                                 min_width=515, min_height=440)
+        self.pre_panels = self._analysis_panels(left, plots)
+        v.addWidget(self.pre_panels, 1)
         return w
 
     # tab ③ ----------------------------------------------------------------
@@ -399,6 +451,7 @@ class MainWindow(QMainWindow):
         self.box_peth = QGroupBox()
         bl = QVBoxLayout(self.box_peth)
         mrow = QFormLayout()
+        mrow.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.lbl_marker_use = QLabel()
         self.cb_marker_use = QComboBox()
         mrow.addRow(self.lbl_marker_use, self.cb_marker_use)
@@ -431,14 +484,11 @@ class MainWindow(QMainWindow):
         right.addWidget(self.peth_views)
         right.addWidget(self.fig_auc)
         right.setSizes([560, 340])
-        split = QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(False)
-        controls = _scroll(left)
-        controls.setMinimumWidth(14 * self.fontMetrics().height())
-        split.addWidget(controls)
-        split.addWidget(right)
-        split.setSizes([380, 900])
-        v.addWidget(split, 1)
+        plots = ResponsivePanels(right, [self.peth_views, self.fig_auc],
+                                 [("刺激锁定", "Peri-event"), ("分组统计", "Group statistics")],
+                                 min_width=680, min_height=320)
+        self.peth_panels = self._analysis_panels(left, plots)
+        v.addWidget(self.peth_panels, 1)
         return w
 
     # tab ④ ----------------------------------------------------------------
@@ -480,14 +530,11 @@ class MainWindow(QMainWindow):
         right.setChildrenCollapsible(False)
         right.addWidget(self.fig_events)
         right.addWidget(bottom)
-        split = QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(False)
-        controls = _scroll(left)
-        controls.setMinimumWidth(14 * self.fontMetrics().height())
-        split.addWidget(controls)
-        split.addWidget(right)
-        split.setSizes([380, 900])
-        v.addWidget(split, 1)
+        plots = ResponsivePanels(right, [self.fig_events, self.fig_dist, self.fig_rate],
+                                 [("事件波形", "Events"), ("分布", "Distributions"), ("频率", "Rates")],
+                                 min_width=680, min_height=445)
+        self.event_panels = self._analysis_panels(left, plots)
+        v.addWidget(self.event_panels, 1)
         return w
 
     # tab ⑤ ----------------------------------------------------------------
@@ -555,12 +602,14 @@ class MainWindow(QMainWindow):
     def _build_log(self):
         self.log_dock = QDockWidget(self)
         self.log_dock.setObjectName("log")
-        self.log_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.log_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable |
+                                  QDockWidget.DockWidgetClosable)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(5000)
         self.log_dock.setWidget(self.log_view)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
+        self.m_help.addAction(self.log_dock.toggleViewAction())
         self.log_view.setMinimumHeight(60)
         QTimer.singleShot(0, lambda: self.resizeDocks([self.log_dock], [110], Qt.Vertical))
 
@@ -596,6 +645,10 @@ class MainWindow(QMainWindow):
                      (self.a_quit, "act_quit"), (self.a_manual, "act_manual"), (self.a_guide, "act_guide"), (self.a_about, "act_about")):
             a.setText(t(k))
         self.files_box.setTitle(t("files"))
+        self.file_menu_button.setText(t("files"))
+        self.a_compact_remove.setText(t("btn_remove"))
+        for panels in self.findChildren(ResponsivePanels):
+            panels.set_lang(self.lang)
         for b, k in ((self.b_add, "btn_add"), (self.b_folder, "btn_folder"),
                      (self.b_sample, "btn_sample"), (self.b_remove, "btn_remove")):
             b.setText(t(k))
@@ -648,7 +701,7 @@ class MainWindow(QMainWindow):
         self.box_peth.setTitle(t("grp_peth"))
         self.lbl_marker_use.setText(t("lbl_marker_use"))
         self.b_peth.setText(t("btn_peth"))
-        self.b_abet_compare.setText("Compare ABET cue and tray groups…" if self.lang == "en"
+        self.b_abet_compare.setText("Compare ABET groups…" if self.lang == "en"
                                     else "比较 ABET 声音与进槽分组…")
         self.b_abet_compare.setToolTip(
             "Requires preprocessed calcium resampled to the ABET interval. Baseline −3 to 0 s, response 0 to 3 s."
@@ -1114,7 +1167,9 @@ class MainWindow(QMainWindow):
         if self._busy:
             return
         previous = self.cfg.abet_by_recording.get(str(self.current.resolve())) if self.current else None
-        path = Path(previous.path) if previous and previous.mode != "disabled" else self.abet_candidate
+        path = self.abet_candidate if self.current else None
+        if previous and previous.mode != "disabled":
+            path = Path(previous.path)
         if path is None or not path.is_file():
             folder = str(self.current.parent) if self.current else self.settings.value("last_dir", "")
             path, _ = QFileDialog.getOpenFileName(self, self.b_abet.text(), folder, "ABET XML (*.xml *.XML)")
@@ -1144,6 +1199,14 @@ class MainWindow(QMainWindow):
         raw = self.A
         selected = self.cb_marker_use.currentText()
 
+        if raw is not None and raw.abet is not None and session is not None:
+            info = raw.abet.info
+            if (info["source"] == str(Path(spec.path).resolve()) and info["source_sha256"] == session.sha256
+                    and info["control_gap_s"] == spec.control_gap_s):
+                # Inspecting the same XML and confirming unchanged settings preserves calculated results.
+                self.cfg.abet_by_recording[key] = spec
+                self._sync_abet()
+                return
         if raw is not None:
             self._store_dedrift()
 
@@ -1370,15 +1433,19 @@ class MainWindow(QMainWindow):
             self._load_dedrift()
             self._loaded_once = True
             self.lbl_pre.clear()
+            self.lbl_export.clear()
+            self.progress.reset()
             self.log(plotting_tr("log_read", self.lang, name=path.name))
             self._refresh_marker_choices()
             self._show_markers_found()
             self.redraw_all()
+            self.read_panels.select(1)
 
         self._run(lambda: read_with_behavior(path, cfg), done)
 
     def _choose_windows(self):
         self.tabs.setCurrentIndex(0)
+        self.read_panels.select(0)
         if self.A is None:
             self.b_read.setFocus()
         else:
@@ -1424,8 +1491,7 @@ class MainWindow(QMainWindow):
         message = self.t("pre_confirm_data", file=raw.source, group=names.get("group") or self.t("none"),
                          preview=preview, control=control, signal=signal, source=source, window=window, baseline=baseline,
                          count=len(raw.time), fs=raw.fs, start=raw.time[0], end=raw.time[-1])
-        return QMessageBox.question(self, self.t("pre_confirm_title"), message,
-                                    QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes
+        return confirm_details(self, self.t("pre_confirm_title"), message)
 
     def step_pre(self):
         if not self._need("file", "A"):
@@ -1456,6 +1522,7 @@ class MainWindow(QMainWindow):
             self.log(msg)
             self.log(format_dff_formula(a, self.B, self.lang))
             self.redraw_all()
+            self.pre_panels.select(1)
 
         self._run(work, done)
 
@@ -1476,6 +1543,7 @@ class MainWindow(QMainWindow):
                 self.log(plotting_tr("log_nonfinite_pre", self.lang, n=p.skipped_incomplete_pre))
             self._fill_trial_table()
             self.redraw_all()
+            self.peth_panels.select(1)
 
         self._run(lambda: analysis.peri_event(b, onsets, cfg.peth, marker), done)
 
@@ -1500,6 +1568,7 @@ class MainWindow(QMainWindow):
             self.log(plotting_tr("log_events", self.lang, n=s["n_events"], rate=s["rate_per_min"]))
             self._show_event_summary()
             self.redraw_all()
+            self.event_panels.select(1)
 
         self._run(work, done)
 
@@ -1706,6 +1775,7 @@ class MainWindow(QMainWindow):
         self._busy = busy
         self.a_update.setEnabled(not busy)
         self.files_box.setEnabled(not busy)
+        self.file_compact.setEnabled(not busy)
         self.chan_box.setEnabled(not busy)
         self.m_file.setEnabled(not busy)
         self.m_lang.setEnabled(not busy)
@@ -1720,6 +1790,7 @@ class MainWindow(QMainWindow):
         for b in (self.b_read, self.b_pre, self.b_peth, self.b_events, self.b_export, self.b_batch):
             b.setEnabled(has and not self._busy)
         self.b_remove.setEnabled(has and not self._busy)
+        self.a_compact_remove.setEnabled(has and not self._busy)
         self.b_manifest_template.setEnabled(has and not self._busy)
         self.b_export_events.setEnabled(self.events is not None and not self._busy)
         self.b_cancel.setEnabled(self._busy)
@@ -1839,16 +1910,16 @@ def _empty_events():
 def _deconv_only(c, b, onsets, lang):
     """Deconvolution result before any events are detected."""
     from ..i18n import tr
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.4), sharex=True,
+                                   gridspec_kw={"height_ratios": [3, 1]}, layout="constrained")
     plotting.plot_trace(ax1, b.time, b.dff, color="#b5b4ae", lw=0.5, label=tr("dff", lang))
     plotting.plot_trace(ax1, c.time, c.denoised, color=plotting.C_DENOISED, lw=1.0, label=tr("denoised", lang))
     plotting.set_stimulus_lines(ax1, onsets)
     ax1.set_ylabel(f"{tr('dff', lang)} ({b.unit})")
-    ax1.legend(loc="upper right", ncol=2)
     plotting.plot_trace(ax2, c.time, c.spikes, spikes=True, color=plotting.INK_2, lw=0.6)
     ax2.set_ylabel(tr("spikes", lang))
     ax2.set_xlabel(tr("time_s", lang))
     tau = decay_time_constant(c)
     ax1.set_title(f"{tr('deconv_title', lang)} · τ = {tau:.2f} s", loc="left")
-    fig.tight_layout()
+    plotting._outside_legend(fig, (ax1, ax2))
     return fig

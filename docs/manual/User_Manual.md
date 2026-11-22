@@ -1,6 +1,6 @@
 # FiberLume Fiber Photometry Analysis · Manual for New Students
 
-> Version 0.6.5. Working through the sample data takes about 15 minutes.
+> Version 0.6.6. Working through the sample data takes about 15 minutes.
 
 ## Contents
 
@@ -42,6 +42,8 @@ On an Apple silicon Mac, open `FiberLume-0.6.0-macOS-AppleSilicon.dmg`, drag **F
 After installing, open **Help → Check for updates**, download the patch and restart the app. The installer includes Python and the analysis dependencies.
 
 ## 3. The interface
+
+In a narrow window or at high display scaling, switch between parameters and plots within each analysis page. Run the analysis, then select the waveform, heatmap or statistics view. Widen the window to see panels side by side. Legends below the traces identify the events. The plot toolbar provides zoom and save controls.
 
 ![Main window after start-up](img/en_00_start.png)
 
@@ -133,19 +135,15 @@ Open **⑤ Export & batch**:
 
 #### ABET cue and tray sessions
 
-Place each calcium recording next to its same-stem ABET XML, for example `mouse01.csv` and `mouse01.xml`. Open the ABET XML in Load data and inspect trials, cue, tray light, accepted tray entry and feeder commands. The feeder timestamp records the command sent by the task. Measuring consumption requires a separate observation.
+Place each calcium recording next to its same-stem ABET file, for example `mouse01.csv` and `mouse01.xml`. Review cues, tray lights, entries and feeder commands on the load page. Feeder timestamps indicate when the program sent the command.
 
-Choose a clock mapping for each recording. One measured pulse on both clocks gives an offset. Two corresponding rising edges also estimate relative clock rate. For rigs where the first `start #1` pulse starts acquisition, explicitly selecting the assumed-trigger mode places the pulse at first-frame time minus the assumed startup latency (default zero). The span difference between the first/last frames and the start/end pulses can include other effects such as a stop delay or clock drift. Behavior-only mode allows trial inspection and export while synchronization is pending.
+FiberLume maps the first and last calcium frames to the two rising edges of `start #1`. It resamples continuous fluorescence onto a uniform grid between these times, keeping the original sampling rate as closely as possible. For pulse span D seconds and original rate f Hz, the grid has max(1, round(D × f)) + 1 samples, including both endpoints. Compression applies a low-pass filter to reduce aliasing. Behavior events retain their XML timestamps. This procedure matches session duration. Measuring actual startup latency requires an independent timing reference. If there are fewer or more than two boundary pulses, check the XML or unlink it to analyze calcium separately.
 
-After preprocessing choose **Compare ABET cue and tray groups** in the peri-event tab. Standard cues are grouped by subsequent accepted response or timeout. Unusual simultaneous light and tone trials are reported separately. Each waveform is centered on its preceding 3 seconds; the mean, signed AUC and selected peak direction use 0 to 3 seconds. Compare the combined accepted tray entry and feeder command with isolated out-of-window tray entries. These session-level summaries preserve trial IDs and exclusions. Account for repeated trials within animals in downstream inference.
+After preprocessing, select the desired `ABET:` marker in **③ Peri-event** and run the analysis. Choose **Compare ABET cue and tray groups** to group standard cues by subsequent accepted response or timeout. Simultaneous light and tone trials are reported separately. Each waveform is centered on its preceding 3 seconds. The mean, signed AUC and selected peak direction use 0 to 3 seconds. The comparison retains trial IDs and exclusions.
 
-Batch export takes per-recording settings or a synchronization manifest. Look under each session's `abet` directory for trials and clock information and under `locked` for mapped event metrics, traces and group summaries. Check the sync mode before pooling sessions.
-
-On the export tab use **Export manifest template** to write one row per recording, including any previously set anchors. Set `recording`, the optional `xml` path and `mode`. Choose `behavior_only` for native seconds or `disabled` to skip the association. For `assumed_trigger`, supply `latency_s` (zero for an unknown delay). For `offset`, enter the matching `abet_1_s` and `calcium_1_s`. For `affine`, also fill in `abet_2_s` and `calcium_2_s` for a later matched event. Load the manifest on the same tab, then run the batch. The root `batch_abet_groups.csv` includes per-session sample counts, sync modes, units and group means.
+On the export page choose **Export manifest template** and check each recording's `recording`, `xml`, `enabled` and `control_gap_s`. Enter 0 for `enabled` to skip that association. Enabled associations in older manifests use the same two-pulse rule. Each session's `abet` directory contains trial, timing and group results. The batch directory includes `batch_abet_groups.csv`. The HDF5 export retains original acquisition frames for comparison with the uniform analysis grid.
 
 ### 5.2 Three things to check when reading
-
-For batch timing checks, `batch_summary.csv` lists recording and pulse spans separately. With measured anchors and two boundary pulses, `abet_first_frame_minus_mapped_start_s` and `abet_last_frame_minus_mapped_end_s` give the signed time of the corresponding frame relative to the mapped pulse. A positive value means the frame came later. These columns stay blank for behavior-only and assumed-trigger sessions.
 
 1. **Sampling rate**: our lab records at **50 Hz**. If the file does not store its sampling rate, an orange note appears; enter `50` under **Sampling rate (Hz)**. “from file” means the rate stored in the file is used.
 2. **Channels**: use the Preview thumbnails to confirm the signal and control channels. If the guess is wrong, change it in the drop-down lists.

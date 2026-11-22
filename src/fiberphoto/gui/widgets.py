@@ -305,7 +305,7 @@ class FigureView(QWidget):
         self.placeholder = QLabel(placeholder)
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setWordWrap(True)
-        self.placeholder.setStyleSheet("color: #8a8984; font-size: 13px;")
+        self.placeholder.setStyleSheet("color: #70716c;")
         self.lay.addWidget(self.placeholder, 1)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -334,8 +334,18 @@ class FigureView(QWidget):
         self.canvas = PreviewCanvas(fig)
         # Keep tick labels, legends and data readable even in a compact splitter pane.
         # These sizes are Qt logical pixels, independent of the backing display scale.
-        width, height = fig.get_size_inches()
-        self.canvas.setMinimumSize(max(230, round(76 * width)), max(195, round(77 * height)))
+        # A wide exported time series can reflow into a single narrow column.
+        # Reserve extra space only for additional plot columns and the actual legend.
+        columns = {ax.get_subplotspec().colspan.start for ax in fig.axes
+                   if ax.get_subplotspec() is not None and ax.get_label() != "<colorbar>"}
+        width = 255 if len(fig.axes) == 1 else 330
+        if len(columns) > 1:
+            width = 450
+        renderer = self.canvas.get_renderer()
+        for legend in fig.legends:
+            width = max(width, round(legend.get_window_extent(renderer).width /
+                                     self.canvas.device_pixel_ratio) + 20)
+        self.canvas.setMinimumSize(width, max(195, round(77 * fig.get_figheight())))
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setIconSize(self.toolbar.iconSize() * 0.8)
         self.lay.insertWidget(0, self.toolbar)

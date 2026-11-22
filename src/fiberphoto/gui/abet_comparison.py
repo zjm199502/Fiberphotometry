@@ -2,9 +2,10 @@
 from pathlib import Path
 
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QLabel, QMessageBox,
-                               QPushButton, QVBoxLayout)
+                               QPushButton)
 
 from ..abet_analysis import LABELS, analyze_abet, export_abet_analysis, figure_abet_analysis
+from .dialog_layout import dialog_layout
 from .widgets import FigureView
 
 
@@ -20,9 +21,9 @@ def compare_abet(window):
     def show(result):
         dialog = QDialog(window)
         dialog.setWindowTitle("ABET trial comparison" if en else "ABET 行为分组比较")
-        dialog.resize(980, 720)
-        layout = QVBoxLayout(dialog)
+        outer, layout = dialog_layout(dialog, 980, 720)
         view = FigureView()
+        view.setMinimumHeight(10 * view.fontMetrics().height())
         view.set_figure(figure_abet_analysis(result, language))
         layout.addWidget(view, 1)
         counts = " · ".join(f"{LABELS[row.group][int(en)]} {row.n_used}/{row.n_candidates}"
@@ -32,7 +33,7 @@ def compare_abet(window):
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         save = QPushButton("Export this comparison…" if en else "导出本次比较…")
-        buttons.addButton(save, QDialogButtonBox.ActionRole)
+        layout.addWidget(save)
         buttons.rejected.connect(dialog.reject)
 
         def save_result():
@@ -49,7 +50,7 @@ def compare_abet(window):
                 except OSError as exc:
                     window.error(str(exc))
         save.clicked.connect(save_result)
-        layout.addWidget(buttons)
+        outer.addWidget(buttons)
         dialog.exec()
         dialog.deleteLater()
 

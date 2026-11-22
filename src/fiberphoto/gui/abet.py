@@ -4,10 +4,11 @@ from pathlib import Path
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QDoubleSpinBox,
-                               QFileDialog, QFormLayout, QHBoxLayout, QLabel, QScrollArea, QWidget,
-                               QMessageBox, QPushButton, QTableView, QVBoxLayout)
+                               QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+                               QMessageBox, QPushButton, QTableView)
 
 from ..abet import AbetConfig, align_abet, read_abet
+from .dialog_layout import dialog_layout
 
 
 class TrialModel(QAbstractTableModel):
@@ -64,16 +65,7 @@ class AbetDialog(QDialog):
         self.calcium_time = calcium_time
         self.standalone = standalone
         self.setWindowTitle(self.tr2("ABET 行为试次与钙信号重采样", "ABET trials and calcium resampling"))
-        available = self.screen().availableGeometry()
-        self.resize(min(850, int(.92 * available.width())), min(650, int(.86 * available.height())))
-        outer = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        scroll.setWidget(content)
-        outer.addWidget(scroll, 1)
+        outer, layout = dialog_layout(self, 850, 650)
         file_row = QHBoxLayout()
         self.filename = self.label()
         file_row.addWidget(self.filename, 1)
@@ -85,7 +77,7 @@ class AbetDialog(QDialog):
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.verticalHeader().setVisible(False)
-        self.table.setMinimumHeight(self.fontMetrics().height()*7)
+        self.table.setMinimumHeight(self.fontMetrics().height() * 7)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table, 1)
         self.span = self.label()
@@ -93,7 +85,6 @@ class AbetDialog(QDialog):
         self.form = QFormLayout()
         layout.addLayout(self.form)
         self.gap = self.seconds()
-        self.gap.setParent(self)
         if not standalone:
             self.form.addRow(self.tr2("对照进槽隔离间隔", "Control tray-entry isolation"), self.gap)
         else:
@@ -105,11 +96,12 @@ class AbetDialog(QDialog):
         layout.addWidget(self.error_text)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.button(QDialogButtonBox.Ok).setText(self.tr2("关闭", "Close") if standalone else
-                                                         self.tr2("确认设置", "Apply settings"))
+                                                         self.tr2("确认设置", "Apply"))
         self.buttons.button(QDialogButtonBox.Cancel).setText(self.tr2("取消", "Cancel"))
         self.buttons.button(QDialogButtonBox.Cancel).setVisible(not standalone)
-        export_btn = self.buttons.addButton(self.tr2("导出行为试次…", "Export behavior trials…"), QDialogButtonBox.ActionRole)
+        export_btn = QPushButton(self.tr2("导出行为试次…", "Export behavior trials…"))
         export_btn.clicked.connect(self.export_native)
+        layout.addWidget(export_btn)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         outer.addWidget(self.buttons)
@@ -125,7 +117,7 @@ class AbetDialog(QDialog):
         return label
 
     def seconds(self):
-        spin = QDoubleSpinBox()
+        spin = QDoubleSpinBox(self)
         spin.setDecimals(4)
         spin.setRange(0.0, 1e6)
         spin.setSuffix(" s")

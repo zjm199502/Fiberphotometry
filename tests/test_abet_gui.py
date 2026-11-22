@@ -4,7 +4,7 @@ import pytest
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QComboBox, QDialogButtonBox, QFileDialog
 
-from fiberphoto.abet import AbetConfig, CUE_RESPONDED
+from fiberphoto.abet import AbetConfig, CUE_RESPONDED, read_abet
 from fiberphoto.config import PipelineConfig
 from fiberphoto.gui.abet import AbetDialog
 from fiberphoto.gui.main_window import MainWindow
@@ -44,7 +44,7 @@ def test_abet_inspection_and_single_resampling_rule(qtbot, tmp_path, monkeypatch
     assert "two distinct" in dialog.error_text.text()
 
 
-def test_apply_remove_restore_abet_and_invalidate_only_affected_results(qtbot, tmp_path, abet_xml):
+def test_clock_changes_preserve_source_selections_and_invalidate_results(qtbot, tmp_path, abet_xml):
     first, second = abet_xml.with_suffix(".csv"), tmp_path / "other.csv"
     t = np.arange(600) / 4
     for path in (first, second):
@@ -71,6 +71,9 @@ def test_apply_remove_restore_abet_and_invalidate_only_affected_results(qtbot, t
     assert PipelineConfig.load(cfg_path).for_recording(first, raw=raw).dedrift.signal_start_s == pytest.approx(5.)
     window.B = dedrift(window.A, window.cfg.dedrift)
     result = window.A
+    processed = window.B
+    window.set_abet(AbetConfig(path=str(abet_xml)), session=read_abet(abet_xml))
+    assert window.A is result and window.B is processed
     window.file_list.setCurrentRow(1)
     assert not window.lbl_abet.text()
     window.file_list.setCurrentRow(0)
@@ -92,3 +95,12 @@ def test_apply_remove_restore_abet_and_invalidate_only_affected_results(qtbot, t
     qtbot.waitUntil(lambda: not window._busy)
     assert edits["signal_start_s"].value() == pytest.approx(5.)
     assert window.A.markers[window.A.manual_ttl_label].tolist() == pytest.approx([point])
+    replacement = tmp_path / "longer.xml"
+    replacement.write_text(abet_xml.read_text().replace("<Time>128</Time>", "<Time>160</Time>"))
+    window.B = processed
+    window.set_abet(AbetConfig(path=str(replacement)))
+    qtbot.waitUntil(lambda: not window._busy)
+    assert window.A.time[-1] == 160 and window.B is None
+    expected = window.A.from_acquisition_time(raw.to_acquisition_time(5.))
+    assert edits["signal_start_s"].value() == pytest.approx(expected, abs=1e-6)
+    assert window.A.markers[window.A.manual_ttl_label] == pytest.approx([window.A.from_acquisition_time(native_point)])
