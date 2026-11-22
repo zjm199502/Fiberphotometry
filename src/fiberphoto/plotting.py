@@ -206,6 +206,7 @@ def _kind_label(kind: str, dff_unit: str, lang: str) -> str:
 def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=None, kind: str = "z") -> Figure:
     """Heatmap of every trial above the mean ± SEM trace; ``kind`` is "z" or "dff"."""
     trials = p.get(kind)
+    cfg_peth = p.window_config or cfg_peth
     label = tr("zscore", lang) if kind == "z" or p.dff_unit == "z" else f"ΔF/F ({p.dff_unit})"
     fig = plt.figure(figsize=(5.8, 6), layout="constrained")
     grid = fig.add_gridspec(2, 2, height_ratios=[1.2, 1], width_ratios=[25, 1])
@@ -214,8 +215,9 @@ def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=Non
     if trials.size:
         vmax = np.nanpercentile(np.abs(trials), 99) or 1.0
         norm = TwoSlopeNorm(vcenter=0, vmin=-vmax, vmax=vmax)
+        half_sample = (p.t_rel[1] - p.t_rel[0]) / 2
         im = ax1.imshow(trials, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest",
-                        extent=[p.t_rel[0], p.t_rel[-1], trials.shape[0] + 0.5, 0.5])
+                        extent=[p.t_rel[0] - half_sample, p.t_rel[-1] + half_sample, trials.shape[0] + 0.5, 0.5])
         cb = fig.colorbar(im, cax=fig.add_subplot(grid[0, 1]))
         cb.set_label(label)
         cb.outline.set_visible(False)
@@ -232,6 +234,7 @@ def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=Non
         ax2.plot(p.t_rel, m, color=C_SIGNAL, lw=2, label=f"{tr('mean_sem', lang)} (n={len(trials)})")
     ax2.axvline(0, color=INK, lw=0.8)
     ax2.axhline(0, color=GRID, lw=0.8, zorder=0)
+    ax2.set_xlim(*(cfg_peth.trial_bounds_s() if cfg_peth else (p.t_rel[0], p.t_rel[-1])))
     ax2.set_ylabel(label)
     ax2.set_xlabel(tr("time_rel", lang))
     ax2.set_title(tr("peth_title", lang), loc="left")

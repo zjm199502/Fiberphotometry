@@ -1,7 +1,7 @@
 """Stimulus-locked ΔF/F (on data B) and transient detection (on data C)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,8 @@ class PethResult:
     dff_unit: str              # unit of data B (e.g. ratio, % or z)
     skipped_incomplete_pre: int = 0  # complete time windows with a nonfinite pre-stimulus value
     peak_direction: str = "positive"
+    window_config: PethConfig | None = field(default=None, kw_only=True)
+    marker_sources: tuple[str, ...] = ()
 
     def paired_values(self, metric: str, kind: str):
         target = f"peak_{kind}" if metric == "peak" else f"auc_target_{kind}"
@@ -94,13 +96,23 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
     if cfg.peak_direction not in ("positive", "negative"):
         raise ValueError("峰方向须为正峰或负峰 / Peak direction must be positive or negative")
     onsets = merge_close(onsets, cfg.min_interval_s)
-    n_pre = int(round(cfg.pre_s * b.fs))
+    for start, end in ((cfg.baseline_start_s, cfg.baseline_end_s), (cfg.response_start_s, cfg.response_end_s)):
+        if not np.isfinite([start, end]).all() or start >= end:
+            raise ValueError("基线窗和目标窗的开始时间须早于结束时间。Each window must have a finite start before its end.")
+    start, end = cfg.trial_bounds_s()
+    if not np.isfinite([start, end]).all() or start > 0 or end < 0:
+        raise ValueError("取窗范围须包含刺激零点。The trial must include stimulus time zero.")
+    # Keep sampled times inside the two outer limits. Explicit protocols retain nearest-frame rounding.
+    n_pre = int(np.floor(-start * b.fs + 1e-9)) if cfg.pre_s is None else round(cfg.pre_s * b.fs)
     if n_pre < 1:
         raise ValueError("刺激前时长须包含至少一个采样点。Increase the pre-stimulus window to include at least one sample.")
-    n_post = int(round(cfg.post_s * b.fs))
+    n_post = int(np.floor(end * b.fs + 1e-9)) if cfg.post_s is None else round(cfg.post_s * b.fs)
     t_rel = np.arange(-n_pre, n_post + 1) / b.fs
-    base_m = (t_rel >= cfg.baseline_start_s) & (t_rel < cfg.baseline_end_s)
-    targ_m = (t_rel >= cfg.response_start_s) & (t_rel <= cfg.response_end_s)
+    tolerance = 1e-9 / b.fs
+    base_m = (t_rel >= cfg.baseline_start_s - tolerance) & (t_rel < cfg.baseline_end_s - tolerance)
+    targ_m = (t_rel >= cfg.response_start_s - tolerance) & (t_rel <= cfg.response_end_s + tolerance)
+    if cfg.pre_s is None and cfg.post_s is None and not (base_m.any() and targ_m.any()):
+        raise ValueError("基线窗和目标窗均需至少一个采样点。Each window must contain at least one sample.")
     dt = 1.0 / b.fs
 
     zs, dffs, used, rows = [], [], [], []
@@ -131,7 +143,8 @@ def peri_event(b: DffData, onsets: np.ndarray, cfg: PethConfig, marker: str = ""
         rows.append(row)
     empty = np.empty((0, t_rel.size))
     return PethResult(marker, t_rel, np.vstack(zs) if zs else empty, np.vstack(dffs) if dffs else empty,
-                      np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre, cfg.peak_direction)
+                      np.array(used), pd.DataFrame(rows), b.unit, skipped_incomplete_pre, cfg.peak_direction,
+                      window_config=replace(cfg))
 
 
 @dataclass

@@ -1,7 +1,7 @@
 name: Native desktop layout
 on:
   push:
-    branches: [codex/gui-qa-066]
+    branches: [codex/gui-qa-066, codex/fiberlume-068]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        scale: ['1', '1.5']
+        scale: ['1', '1.25', '1.5']
     env:
       PYTHONUTF8: '1'
       QT_SCALE_FACTOR: ${{ matrix.scale }}

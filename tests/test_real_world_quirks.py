@@ -160,6 +160,34 @@ def test_peri_event_signed_window_extrema_and_first_latency():
     plt.close(fig)
 
 
+def test_windows_before_zero_set_the_trial_and_figure_extent():
+    from matplotlib import pyplot as plt
+    from fiberphoto.analysis import peri_event
+    from fiberphoto.config import PethConfig
+    from fiberphoto.data import DffData
+    from fiberphoto.plotting import fig_peth
+
+    time = np.arange(0, 20, 0.25)
+    data = DffData(time=time, dff=time, fs=4., signal=time, reference=time, method="x", unit="%")
+    cfg = PethConfig(baseline_start_s=-3., baseline_end_s=-1., response_start_s=-4.1, response_end_s=-2.)
+    p = peri_event(data, [5., 19.75], cfg)
+    np.testing.assert_array_equal(p.onsets, [5., 19.75])
+    np.testing.assert_array_equal(p.t_rel, np.arange(-4., 0.25, 0.25))
+    np.testing.assert_allclose(p.metrics["peak_latency_s"], -2.)
+    np.testing.assert_allclose(p.metrics["baseline_mean_z"], 0, atol=1e-12)
+    np.testing.assert_allclose(p.trials_dff[:, p.t_rel < 0].mean(axis=1), 0, atol=1e-12)
+    cfg.response_end_s = 2.  # Editing the form leaves the completed result's axes and shading intact.
+    fig = fig_peth(p, "en", cfg_peth=cfg)
+    try:
+        for axis in fig.axes[:2]:
+            np.testing.assert_allclose(axis.get_xlim(), [-4.1, 0.])
+    finally:
+        plt.close(fig)
+    cfg.baseline_end_s = -3.5
+    with pytest.raises(ValueError, match="start before its end"):
+        peri_event(data, [5.], cfg)
+
+
 def test_peth_centers_whole_pre_stimulus_segment_separately_from_z_window():
     from fiberphoto.analysis import peri_event
     from fiberphoto.config import PethConfig

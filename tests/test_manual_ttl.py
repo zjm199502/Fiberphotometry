@@ -193,3 +193,44 @@ def test_last_manual_ttl_keeps_new_hardware_comparisons(tmp_path):
     assert list(m["label"]) == ["stim"]
     assert list(pd.read_csv(two.out_dir / "peth_metrics.csv").onset_s) == [40.]
     assert not list(two.out_dir.glob("previous-manual-ttl-*"))
+
+
+def test_merged_file_and_clicked_events_in_gui_and_export(qtbot, tmp_path):
+    src = recording(tmp_path / "merged.csv")
+    external = tmp_path / "markers.csv"
+    external.write_text("onset,offset,label\n20,22.06,Stim\n42,44,Stim\n50,51,Other\n", encoding="utf-8")
+    w = MainWindow(lang="en")
+    qtbot.addWidget(w)
+    w.add_paths([src])
+    w.marker_file.setText(str(external))
+    w.step_read()
+    qtbot.waitUntil(lambda: w.A is not None)
+    w.edit_manual_ttl(22.)
+    w.edit_manual_ttl(36.)
+    w.cb_marker_use.setCurrentText("Stim + manual TTL")
+    w.set_lang("zh")
+    assert w.cb_marker_use.currentText() == "Stim + 手动 TTL"
+    w.form_peth.editors["align_to"].setCurrentIndex(w.form_peth.editors["align_to"].findData("offset"))
+    w.form_peth.editors["shift_s"].setValue(.5)
+    w.B = dedrift(w.A, w.cfg.dedrift)
+    w.step_peth()
+    qtbot.waitUntil(lambda: w.peth is not None)
+    selected = w.peth
+    np.testing.assert_allclose(selected.onsets, [22.56, 36.5, 44.5])
+    assert selected.marker_sources == ("Stim", "Manual TTL")
+    assert list(selected.metrics["marker_source"]) == ["file+manual", "manual", "file"]
+    cfg = w.forms_store()
+    cfg.deconv.enabled = False
+    result = run_file(src, cfg, tmp_path / "out", make_figures=False)
+    assert not result.error, result.error
+    pd.testing.assert_frame_equal(selected.metrics, result.peth.metrics)
+    exported = pd.read_csv(result.out_dir / "peth_metrics.csv")
+    assert list(exported.marker_source) == list(selected.metrics.marker_source)
+    assert PipelineConfig.load(result.out_dir / "parameters.json").peth.include_manual_ttl
+    method = json.loads((result.out_dir / "analysis_methods.json").read_text(encoding="utf-8"))
+    stage = next(s for s in method["stages"] if s["id"] == "peth")
+    assert stage["parameters"]["marker_sources"] == ["Stim", "Manual TTL"]
+    w.edit_manual_ttl()
+    assert w.peth is None and w.cb_marker_use.currentText() == "Stim + 手动 TTL"
+    w.edit_manual_ttl()
+    assert w.cb_marker_use.currentText() == "Stim"

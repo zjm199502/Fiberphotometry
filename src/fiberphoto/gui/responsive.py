@@ -3,7 +3,37 @@ from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtWidgets import QLayout, QStackedLayout, QTabWidget, QWidget
 
 
-COMPACT_TAB_STYLE = "QTabBar::tab { padding: 2px 8px; }"
+# Apply these rules to individual navigation bars, not to editors or their children.
+def style_tabs(tabs, *, workflow=False, compact=False):
+    bar = tabs.tabBar()
+    bar.setFocusPolicy(Qt.StrongFocus)
+    bar.setExpanding(False)
+    color = "#185491" if workflow else "#d9eafb"
+    ink = "#ffffff" if workflow else "#123f6d"
+    padding = "2px 5px" if compact else ("5px 9px" if workflow else "3px 7px")
+    bar.setStyleSheet(f"""
+        QTabBar::tab {{ border: 1px solid #8798aa; border-radius: 4px;
+            margin-right: 2px; padding: {padding}; background: #f5f7fa; color: #23384c; }}
+        QTabBar::tab:hover {{ background: #e4effa; border-color: #406a95; }}
+        QTabBar::tab:selected {{ background: {color}; color: {ink}; border-color: #225d98;
+            font-weight: 600; }}
+        QTabBar::tab:selected:focus {{ border: 2px solid #aa6500; }}
+        QTabBar::tab:disabled {{ color: #65727e; background: #f0f1f3; border-color: #b4bec7; }}
+    """)
+
+
+class SectionTabs(QTabWidget):
+    """Named sections of a form, using the same widgets when switching language."""
+    def __init__(self, sections):
+        super().__init__()
+        self.labels = [label for _, label in sections]
+        style_tabs(self)
+        for widget, label in sections:
+            self.addTab(widget, label[0])
+
+    def set_lang(self, lang):
+        for index, label in enumerate(self.labels):
+            self.setTabText(index, label[lang == "en"])
 
 
 class ResponsivePanels(QWidget):
@@ -19,7 +49,7 @@ class ResponsivePanels(QWidget):
         self.positions = [(panel.parentWidget(), panel.parentWidget().indexOf(panel)) for panel in panels]
         self.original_sizes = {}
         self.compact = QTabWidget()
-        self.compact.tabBar().setStyleSheet(COMPACT_TAB_STYLE)
+        style_tabs(self.compact)
         self.deck = QStackedLayout(self)
         self.deck.setSizeConstraint(QLayout.SetNoConstraint)
         self.deck.addWidget(splitter)

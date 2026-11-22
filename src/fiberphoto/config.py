@@ -81,14 +81,32 @@ class PethConfig:
     marker: str = ""                # which marker label to align to; "" = first available
     align_to: str = "onset"         # "onset" | "offset" of the TTL pulse
     shift_s: float = 0.0            # added to every stimulus time (e.g. known hardware delay)
-    pre_s: float = 5.0
-    post_s: float = 10.0
+    pre_s: Optional[float] = None   # explicit trial durations for programmatic protocols
+    post_s: Optional[float] = None
     baseline_start_s: float = -5.0
     baseline_end_s: float = 0.0
     response_start_s: float = 0.0   # target window for AUC / peak metrics (s from stimulus)
     response_end_s: float = 5.0
     min_interval_s: float = 0.0     # merge markers closer than this
     peak_direction: str = "positive"  # positive: window maximum; negative: signed minimum
+    include_manual_ttl: bool = False  # add this recording's clicked events to the selected file marker
+
+
+    def trial_bounds_s(self) -> tuple[float, float]:
+        start = min(0., self.baseline_start_s, self.response_start_s) if self.pre_s is None else -self.pre_s
+        end = max(0., self.baseline_end_s, self.response_end_s) if self.post_s is None else self.post_s
+        return start, end
+
+    def parameters(self) -> dict:
+        params = asdict(self)
+        if self.pre_s is None and self.post_s is None:
+            params.pop("pre_s")
+            params.pop("post_s")
+            params["trial_window_source"] = "baseline_and_target"
+        else:
+            params["trial_window_source"] = "explicit_protocol"
+        params["trial_start_s"], params["trial_end_s"] = self.trial_bounds_s()
+        return params
 
 
 @dataclass
@@ -138,7 +156,9 @@ class PipelineConfig:
         return replace(self, dedrift=effective)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        params = asdict(self)
+        params["peth"] = self.peth.parameters()
+        return params
 
     @classmethod
     def from_dict(cls, d: dict) -> "PipelineConfig":
@@ -162,6 +182,10 @@ class PipelineConfig:
                                   for path, spec in d[f.name].items()}
             elif sub is not None and hasattr(sub, "__dataclass_fields__"):
                 known = {k: v for k, v in d[f.name].items() if k in sub.__dataclass_fields__}
+                # Old GUI profiles saved redundant before/after durations, often at their defaults.
+                if f.name == "peth" and d[f.name].get("trial_window_source") != "explicit_protocol":
+                    known.pop("pre_s", None)
+                    known.pop("post_s", None)
                 kwargs[f.name] = type(sub)(**known)
             else:
                 kwargs[f.name] = d[f.name]

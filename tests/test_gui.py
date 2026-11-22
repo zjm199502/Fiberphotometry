@@ -70,10 +70,15 @@ def test_full_walkthrough(qtbot, window, tmp_path, monkeypatch):
     assert "ΔF/F 公式" in w.log_view.toPlainText() and "405nm" in w.log_view.toPlainText()
     run(qtbot, w, w.step_peth)
     assert w.peth is not None and w.trial_table.rowCount() == len(w.peth.trials) > 0
+    assert w.fig_peth.canvas.figure.axes[0].get_xlim() == pytest.approx((-5, 5))
     peak_choice = w.form_peth.editors["peak_direction"]
     peak_choice.setCurrentIndex(peak_choice.findData("negative"))
+    w.form_peth.editors["baseline_end_s"].setValue(-1.0)
+    w.form_peth.editors["response_end_s"].setValue(7.0)
     run(qtbot, w, w.step_peth)
     assert w.peth.peak_direction == "negative"
+    for view in (w.fig_peth, w.fig_peth_dff):
+        assert view.canvas.figure.axes[1].get_xlim() == pytest.approx((-5, 7))
     for tab, unit in [(1, "%"), (0, "z")]:
         w.peth_views.setCurrentIndex(tab)
         auc, peak = w.fig_auc.canvas.figure.axes
@@ -143,7 +148,7 @@ def test_clear_page_preserves_other_results_and_parameters(qtbot, window, tmp_pa
     w.cb_marker_use.setCurrentText("DI2_Lick")
     w.form_dedrift.editors["signal_start_s"].setValue(10.0)
     w.form_dedrift.editors["signal_end_s"].setValue(120.0)
-    w.form_peth.editors["pre_s"].setValue(3.0)
+    w.form_peth.editors["baseline_start_s"].setValue(-3.0)
     w.clear_buttons["read"].click()
     assert w.current.is_file() and w.A is None and w.fig_raw.canvas is None
     assert w.chan_table.rowCount() > 0 and not w.cb_marker_use.count()
@@ -156,7 +161,7 @@ def test_clear_page_preserves_other_results_and_parameters(qtbot, window, tmp_pa
     assert w.cb_marker_use.currentText() == "DI2_Lick"
     assert w.form_dedrift.editors["signal_start_s"].value() == 10
     assert w.form_dedrift.editors["signal_end_s"].value() == 120
-    assert w.form_peth.editors["pre_s"].value() == 3
+    assert w.form_peth.editors["baseline_start_s"].value() == -3
     run(qtbot, w, w.step_pre)
     assert w.B is not None and w.clear_buttons["pre"].isEnabled()
     w.file_list.setCurrentRow(1)
@@ -205,9 +210,10 @@ def test_switch_recordings(qtbot, window):
 def test_parameters_reach_pipeline(qtbot, window):
     w = window
     w.form_dedrift.editors["method"].setCurrentIndex(w.form_dedrift.editors["method"].findData("polynomial"))
-    w.form_peth.editors["pre_s"].setValue(3.0)
+    assert {"pre_s", "post_s"}.isdisjoint(w.form_peth.editors)
+    w.form_peth.editors["baseline_start_s"].setValue(-3.0)
     cfg = w.forms_store()
-    assert cfg.dedrift.method == "polynomial" and cfg.peth.pre_s == 3.0
+    assert cfg.dedrift.method == "polynomial" and cfg.peth.trial_bounds_s() == (-3., 5.)
     assert w.form_dedrift.editors["poly_order"].isEnabled()
     assert not w.form_dedrift.editors["highpass_hz"].isEnabled()
 

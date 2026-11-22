@@ -67,18 +67,14 @@ class BaselinePicker(QWidget):
             row.removeWidget(button)
         for i, (pick, clear, note) in enumerate(((self.signal_button, self.whole, self.signal_note),
                                                 (self.button, self.no_baseline, self.note))):
-            n = 2 * i if compact else i
-            row.addWidget(pick, n, 0)
-            row.addWidget(clear, n, 1)
-            if compact:
-                row.addWidget(note, n + 1, 0, 1, 2)
-            else:
-                row.addWidget(note, n, 2)
+            row.addWidget(pick, i, 0)
+            row.addWidget(clear, i, 1)
+            row.addWidget(note, i, 2)
         if compact:
-            row.addWidget(self.ttl_button, 4, 0)
-            row.addWidget(self.undo_ttl, 4, 1)
-            row.addWidget(self.ttl_note, 5, 0, 1, 2)
-            row.addWidget(self.go_pre, 6, 0, 1, 2)
+            row.addWidget(self.ttl_button, 2, 0)
+            row.addWidget(self.undo_ttl, 2, 1)
+            row.addWidget(self.ttl_note, 2, 2)
+            row.addWidget(self.go_pre, 3, 0, 1, 3)
         else:
             row.addWidget(self.ttl_button, 0, 3)
             row.addWidget(self.undo_ttl, 0, 4)
@@ -98,6 +94,7 @@ class BaselinePicker(QWidget):
     def refresh(self):
         raw = self.host.A
         self.setVisible(raw is not None)
+        self.host.read_settings.setTabEnabled(2, raw is not None)
         ready = self.canvas is not None and raw is not None and not self.host._busy
         fields = self.host.form_dedrift.editors
         cancel = self.tr2("取消框选", "Cancel selection")

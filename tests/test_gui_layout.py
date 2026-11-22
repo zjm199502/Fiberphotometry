@@ -12,7 +12,8 @@ import pytest
 from matplotlib.legend import Legend
 from matplotlib.transforms import Bbox
 from PySide6.QtCore import QRect, QSettings, Qt, QTimer, qVersion
-from PySide6.QtWidgets import (QApplication, QDialogButtonBox, QLabel, QMessageBox, QPushButton, QScrollArea,
+from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDialogButtonBox, QLabel,
+                               QLineEdit, QMessageBox, QPushButton, QScrollArea,
                                QStyle, QStyleOptionButton, QStyleOptionTab, QTabWidget)
 
 from fiberphoto.gui import main_window
@@ -21,7 +22,7 @@ from fiberphoto.sample_data import make_sample_dataset
 
 
 PAGES = (
-    ("read", ["b_read", "b_abet", "b_exclude"], ["fig_raw"]),
+    ("read", ["b_read", "b_abet", "b_exclude", "b_marker_file", "b_marker_clear", "fs_edit"], ["fig_raw"]),
     ("pre", ["b_pre", "b_choose_windows"], ["fig_dedrift", "fig_deconv"]),
     ("peth", ["b_peth", "b_abet_compare"], ["fig_peth", "fig_peth_dff", "fig_auc"]),
     ("events", ["b_events", "b_export_events"], ["fig_events", "fig_dist", "fig_rate"]),
@@ -50,6 +51,10 @@ def _reveal(target):
 
 def _reachable(button, layout_root):
     _reveal(button)
+    return _visible_within(button, layout_root)
+
+
+def _visible_within(button, layout_root):
     if layout_root.isWindow():
         return button.isVisible() and button.visibleRegion().contains(button.rect().adjusted(1, 1, -1, -1))
     # For a large desktop render, test every clipping parent within that virtual
@@ -184,16 +189,89 @@ def _content_geometry(window):
             text = label.fontMetrics().size(Qt.TextExpandTabs, label.text())
             measure("label", label.text(), (rect.width(), rect.height()), (text.width(), text.height()))
 
-    bar = window.tabs.tabBar()
-    for i in range(bar.count()):
-        opt = QStyleOptionTab()
-        bar.initStyleOption(opt, i)
-        rect = bar.style().subElementRect(QStyle.SE_TabBarTabText, opt, bar)
-        text = bar.fontMetrics().size(Qt.TextShowMnemonic, bar.tabText(i))
-        measure("tab", bar.tabText(i), (rect.width(), rect.height()), (text.width(), text.height()))
-        if not bar.rect().contains(bar.tabRect(i)):
-            errors.append(f"workflow tab outside tab bar: {bar.tabText(i)}")
+    for tabs in [window.tabs, *page.findChildren(QTabWidget)]:
+        bar = tabs.tabBar()
+        if not bar.isVisibleTo(window):
+            continue
+        for i in range(bar.count()):
+            opt = QStyleOptionTab()
+            bar.initStyleOption(opt, i)
+            rect = bar.style().subElementRect(QStyle.SE_TabBarTabText, opt, bar)
+            text = bar.fontMetrics().size(Qt.TextShowMnemonic, bar.tabText(i))
+            measure("tab", bar.tabText(i), (rect.width(), rect.height()), (text.width(), text.height()))
+            if tabs in (window.tabs, window.read_panels.compact) and not bar.rect().contains(bar.tabRect(i)):
+                errors.append(f"navigation tab outside tab bar: {bar.tabText(i)}")
     return measurements, errors
+
+
+def _audit_controls(window, full_desktop):
+    """Check each currently exposed settings pane without scrolling anything into view."""
+    page = window.tabs.currentWidget()
+    figures = {view.scroll for view in page.findChildren(main_window.FigureView)}
+    areas = [area for area in page.findChildren(QScrollArea) if area not in figures]
+    if isinstance(page, QScrollArea):
+        areas.insert(0, page)
+    issues, scroll_ranges = [], []
+    for area in areas:
+        if not area.isVisibleTo(window):
+            continue
+        x, y = area.horizontalScrollBar().maximum(), area.verticalScrollBar().maximum()
+        scroll_ranges.append([x, y])
+        if x or (y and full_desktop):
+            issues.append(f"settings require outer scrolling: {x}, {y}")
+    if full_desktop:
+        widgets = []
+        for kind in (QPushButton, QComboBox, QCheckBox, QLineEdit, QAbstractSpinBox):
+            for field in page.findChildren(kind):
+                if not field.isVisibleTo(window) or any(view.isAncestorOf(field) for view in figures):
+                    continue
+                if isinstance(field, QLineEdit) and isinstance(field.parentWidget(), (QAbstractSpinBox, QComboBox)):
+                    continue
+                text = field.objectName() or getattr(field, "text", lambda: "")() or kind.__name__
+                if not _visible_within(field, window):
+                    issues.append(f"clipped control {text!r}")
+                rect = QRect(field.mapTo(page, field.rect().topLeft()), field.size())
+                for other, other_rect, other_name in widgets:
+                    if field.isAncestorOf(other) or other.isAncestorOf(field):
+                        continue
+                    overlap = rect.intersected(other_rect)
+                    if overlap.width() > 1 and overlap.height() > 1:
+                        issues.append(f"overlapping controls: {text!r}, {other_name!r}")
+                widgets.append((field, rect, text))
+    return scroll_ranges, issues
+
+
+def _result_table(table):
+    """Open the real result view and confirm its first and final records can be read."""
+    _reveal(table)
+    model = table.model()
+    rows = model.rowCount()
+    assert rows > 0
+    visible = []
+    for row in (rows - 1, 0):
+        index = model.index(row, 0)
+        table.scrollTo(index)
+        QApplication.processEvents()
+        visible.append(table.viewport().rect().contains(table.visualRect(index).center()))
+    return dict(rows=rows, vertical_range=table.verticalScrollBar().maximum(), endpoints_visible=all(visible))
+
+
+def _long_log(log):
+    text = log.toPlainText()
+    assert text
+    try:
+        log.appendPlainText("\n".join([text] * 8))
+        QApplication.processEvents()
+        bar = log.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        bottom = log.cursorForPosition(log.viewport().rect().bottomLeft()).blockNumber()
+        bar.setValue(0)
+        top = log.cursorForPosition(log.viewport().rect().topLeft()).blockNumber()
+        return dict(vertical_range=bar.maximum(),
+                    endpoints_visible=top == 0 and bottom == log.document().blockCount() - 1)
+    finally:
+        log.setPlainText(text)
+        log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
 
 
 @pytest.mark.skipif(not os.environ.get("FIBERLUME_LAYOUT_ARTIFACTS"), reason="Native desktop layout acceptance")
@@ -229,8 +307,13 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
     available = window.screen().availableGeometry()
     margins = window.windowHandle().frameMargins()
     failures = []
-    for requested in ((1024, 720), (1400, 900)):
-        compact = requested == (1024, 720)
+    # Subtract desktop chrome in logical pixels. A 1920×1080 monitor at 150%
+    # thus gives the application a 1264×640 client, not 1920×1080 logical pixels.
+    scale = window.devicePixelRatioF()
+    desktop = (round(1920 / scale) - 16, round(1080 / scale) - 80)
+    for scenario, requested in (("available", (1024, 720)), ("compact", (980, 680)),
+                                ("1080p", desktop), ("large", (1400, 900))):
+        compact = scenario == "available"
         width, height = requested
         if compact:
             width = min(width, available.width() - margins.left() - margins.right() - 12)
@@ -259,14 +342,14 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             with qtbot.waitExposed(host):
                 host.show()
             qtbot.wait(150)
-        prefix = f"{backend}-{lang}-{requested[0]}x{requested[1]}"
+        prefix = f"{backend}-{lang}-{scenario}-{requested[0]}x{requested[1]}"
         report = dict(platform=platform.platform(), qt=qVersion(), backend=backend, language=lang,
                       dpr=window.devicePixelRatioF(), logical_dpi=window.screen().logicalDotsPerInch(),
                       requested=list(requested), available=list(available.getRect()),
                       client=[window.width(), window.height()], frame=list(window.frameGeometry().getRect()),
                       inside_desktop=host is None and available.contains(window.frameGeometry()),
                       capture="native scroll host widget grab" if host else "native top-level widget grab",
-                      scenario="available desktop" if compact else "large desktop layout",
+                      scenario=scenario, target_monitor_px=[1920, 1080] if scenario == "1080p" else None,
                       pages={})
         issues = []
         if (window.width(), window.height()) != (width, height):
@@ -277,21 +360,70 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             window.tabs.setCurrentIndex(index)
             qtbot.wait(80)
             canvases = {}
-            reach = {name: _reachable(getattr(window, name), window) for name in buttons}
+            reach, scroll_ranges, audited, measurements = {}, {}, set(), []
+            full_desktop = scenario in ("1080p", "large")
+            controls = [(name, getattr(window, name)) for name in buttons]
+            if page == "read":
+                controls.append(("baseline interval", window.baseline_picker.button))
+            for name in {"pre": ("form_dedrift", "form_deconv"), "peth": ("form_peth",),
+                         "events": ("form_events",)}.get(page, ()):
+                controls.extend((f"{name}/{key}", field) for key, field in getattr(window, name).editors.items())
+            for name, control in controls:
+                if name in ("form_dedrift/baseline_start_s", "form_dedrift/baseline_end_s"):
+                    # Exercise these under the method that exposes them, below.
+                    continue
+                reach[name] = _reachable(control, window)
+                key = tuple((id(t), t.currentIndex()) for t in window.tabs.currentWidget().findChildren(QTabWidget)
+                            if t.isVisibleTo(window))
+                if key not in audited:
+                    audited.add(key)
+                    scroll_ranges[name], reasons = _audit_controls(window, full_desktop)
+                    issues.extend(f"{page}/{name}: {reason}" for reason in reasons)
+                    widget_text, clipped = _content_geometry(window)
+                    measurements.extend(widget_text)
+                    issues.extend(f"{page}/{name}: {reason}" for reason in clipped)
+                    if scenario in ("1080p", "large"):
+                        window.grab().save(str(artifacts / f"{prefix}-{page}-controls-{len(audited)}.png"))
+            if page == "pre":
+                editors = window.form_dedrift.editors
+                method = editors["method"]
+                original = method.currentIndex()
+                method.setCurrentIndex(method.findData("signal_interval"))
+                for name in ("baseline_start_s", "baseline_end_s"):
+                    reach[f"manual interval/{name}"] = _reachable(editors[name], window)
+                scroll_ranges["manual interval"], reasons = _audit_controls(window, full_desktop)
+                issues.extend(f"{page}/manual interval: {reason}" for reason in reasons)
+                widget_text, clipped = _content_geometry(window)
+                measurements.extend(widget_text)
+                issues.extend(f"{page}/manual interval: {reason}" for reason in clipped)
+                method.setCurrentIndex(original)
+            if page == "pre" and scenario == "compact":
+                jump = window.b_choose_windows
+                _reveal(jump)
+                qtbot.mouseClick(jump, Qt.LeftButton)
+                qtbot.wait(100)
+                if window.tabs.currentIndex() != 0 or not all(
+                    _visible_within(button, window) for button in
+                    (window.baseline_picker.signal_button, window.baseline_picker.button)
+                ):
+                    issues.append("pre: shortcut does not expose both interval selection buttons")
+                window.tabs.setCurrentIndex(index)
+                qtbot.wait(80)
             issues.extend(f"{page}/{name}: unreachable" for name, ok in reach.items() if not ok)
-            measurements, clipped = _content_geometry(window)
-            issues.extend(f"{page}: {error}" for error in clipped)
-            if page in ("pre", "peth", "events"):
-                for area in window.tabs.currentWidget().findChildren(QScrollArea):
-                    if area.widget() and area.widget().isAncestorOf(getattr(window, buttons[0])):
-                        if area.horizontalScrollBar().maximum() > 0:
-                            issues.append(f"{page}: parameter controls require horizontal scrolling")
+            result_table = {}
+            if page in ("peth", "events"):
+                table = window.trial_table if page == "peth" else window.event_table
+                result_table = _result_table(table)
+                if not result_table["endpoints_visible"]:
+                    issues.append(f"{page}: result rows cannot be reached")
             for name in views:
                 view = getattr(window, name)
                 _reveal(view)
                 if not view.isVisibleTo(window):
                     issues.append(f"{page}/{name}: graph cannot be opened")
                 geometry, collisions = _legend_geometry(view)
+                _, clipped = _content_geometry(window)
+                issues.extend(f"{page}/{name}: {reason}" for reason in clipped)
                 canvases[name] = geometry
                 issues.extend(f"{page}/{name}: {issue}" for issue in collisions)
                 if name == "fig_raw" and sum(len(row["labels"]) for row in geometry["legends"]) < 6:
@@ -305,7 +437,12 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             shot = window.grab()
             assert shot.deviceIndependentSize().toSize() == window.size()
             assert shot.save(str(artifacts / f"{prefix}-{page}.png"))
-            report["pages"][page] = dict(canvases=canvases, reachable=reach, widget_text=measurements)
+            report["pages"][page] = dict(canvases=canvases, reachable=reach, widget_text=measurements,
+                                         settings_scroll_ranges=scroll_ranges, result_table=result_table)
+        if window.log_view.isVisibleTo(window):
+            report["log"] = _long_log(window.log_view)
+            if not report["log"]["endpoints_visible"] or not report["log"]["vertical_range"]:
+                issues.append("log: scrolling does not expose both ends of long logs")
         report["errors"] = issues
         report["passed"] = not issues
         (artifacts / f"{prefix}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -315,4 +452,6 @@ def test_native_desktop_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lan
             # before destroying its temporary native scroll area.
             host.takeWidget()
             host.close()
+            window.setParent(None, Qt.Window)
+            window.show()
     assert not failures, "\n".join(failures)

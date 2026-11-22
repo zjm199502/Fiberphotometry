@@ -17,9 +17,10 @@ def marker_outputs(res, cfg, manual_only=False, selected_labels=None):
     if cfg.save_csv and res.A.markers:
         outputs.add(out / f"{res.name}_dataA_markers.csv")
     outputs.update(p for p in res.figures if p.stem == "01_raw_dataA")
-    if manual_only and res.summary.get("marker") != res.A.manual_ttl_label:
+    sources = set(res.summary.get("marker_sources", [res.summary.get("marker")]))
+    if manual_only and res.A.manual_ttl_label not in sources:
         return outputs
-    if selected_labels is not None and res.summary.get("marker") not in selected_labels:
+    if selected_labels is not None and sources.isdisjoint(selected_labels):
         return outputs
     if res.peth is not None:
         outputs.update(out / name for name in TRIAL_TABLES)

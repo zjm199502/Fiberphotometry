@@ -207,14 +207,19 @@ def _events(res, cfg):
 
 def _peth(res, cfg):
     p = res.peth
-    params = dict(asdict(cfg), actual_marker=p.marker, input_markers=res.summary.get("n_markers"),
+    cfg = p.window_config or cfg
+    params = dict(cfg.parameters(), actual_marker=p.marker, input_markers=res.summary.get("n_markers"),
                   accepted_trials=len(p.onsets), dt_s=1/res.B.fs,
                   dff_centering="subtract_entire_pre_stimulus_mean", pre_samples=int((p.t_rel < 0).sum()),
-                  skipped_nonfinite_pre_trials=p.skipped_incomplete_pre)
+                  post_samples=int((p.t_rel > 0).sum()),
+                  sampled_range_s=[p.t_rel[0], p.t_rel[-1]], skipped_nonfinite_pre_trials=p.skipped_incomplete_pre)
     anchor = ("标记终点（缺失时回退到该脉冲起点）" if cfg.align_to == "offset" else "标记起点")
     rules = [f"刺激零点 = {anchor} + ({cfg.shift_s:g} s)。显式信号区间仅保留区间内的对齐时间。",
              "按时间排序后，距上一个保留标记不足 min_interval_s 的标记丢弃；取 data B 中第一帧 t ≥ 标记时间为零点。",
-             "前后分别取 round(pre_s × fs)、round(post_s × fs) 帧。刺激前至少需一帧，越界或刺激前含非有限值的试次丢弃。",
+             ("取窗从 min(0, 基线开始, 目标开始) 到 max(0, 基线结束, 目标结束)，保留边界内的采样点，绘图使用相同时间范围。"
+              if cfg.pre_s is None and cfg.post_s is None else
+              "程序化协议显式指定的刺激前后时长按 round(时长 × fs) 取帧；其余边界随基线窗和目标窗确定。"),
+             "刺激前至少需一帧，越界或刺激前含非有限值的试次丢弃。",
              "第 i 试次的 μᵢ = mean(本试次 data B[t < 0])，归零曲线 yᵢ(t) = data Bᵢ(t) − μᵢ，保留 data B 的单位。"
              "μᵢ 写入 peth_metrics.csv 的 prestimulus_mean_input_dff 列。"]
     if len(p.onsets):
@@ -225,7 +230,12 @@ def _peth(res, cfg):
                    "基线窗和目标窗各取有限样本的最小值作为负峰，保留原符号。") +
                   "峰潜伏期为目标窗内首次达到该极值的采样时刻相对刺激的秒数。",
                   "逐时点跨试次均值与 SEM = 样本标准差/√有效试次数。"]
-    return _stage("peth", "刺激锁定试次", "pipeline.pick_marker / analysis.peri_event", params, rules,
+    params["marker_sources"] = list(p.marker_sources)
+    if len(p.marker_sources) == 2:
+        rules.append("所选文件打标与本记录手动 TTL 按时间合并。文件使用指定脉冲边沿，手动点使用点击时刻。"
+                     "两者落在同一最近采样帧时仅保留文件时刻，再统一加偏移并应用最小间隔。"
+                     "peth_metrics.csv 的 marker_source 列记录 file、manual 或 file+manual。")
+    return _stage("peth", "刺激锁定试次", "stimulus_markers.resolve_markers / analysis.peri_event", params, rules,
                   ["Sherathiya et al. (2021) · GuPPy 逐试次基线扣除", "SciPy · trapezoid"] if len(p.onsets) else [])
 
 

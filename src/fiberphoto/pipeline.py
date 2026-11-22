@@ -26,6 +26,7 @@ from .config import ChannelConfig, PipelineConfig
 from .data import DeconvData, DffData, RawData, save_stage
 from .i18n import tr
 from .recordings import is_recording, read_recording, recording_family
+from .stimulus_markers import configured_markers, resolve_markers
 from .preprocess import DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula
 
 LogFn = Callable[[str], None]
@@ -59,21 +60,8 @@ def pick_marker(a: RawData, wanted: str, align: str = "onset", shift_s: float = 
     stimulus follows the pulse); pulses without a recorded end fall back to
     their onset. ``shift_s`` is then added to every time.
     """
-    if wanted and wanted.startswith("ABET:") and wanted not in a.markers:
-        return "", np.array([])  # A missing trial group has zero events in this recording.
-    label = wanted if wanted and wanted in a.markers else next(
-        (k for k, v in a.markers.items() if len(v)), "")
-    if not label:
-        return "", np.array([])
-    times = np.asarray(a.markers[label], dtype=float)
-    if align == "offset":
-        off = np.asarray(a.marker_offsets.get(label, np.full(times.size, np.nan)), dtype=float)
-        if off.size == times.size:
-            times = np.where(np.isnan(off), times, off)
-    times = times + shift_s
-    if processed is not None and processed.signal_start_s is not None:
-        times = times[(times >= processed.signal_start_s) & (times <= processed.signal_end_s)]
-    return label, times
+    markers = resolve_markers(a, wanted, align, shift_s, processed=processed)
+    return markers.label, markers.times
 
 
 def attach_behavior(raw: RawData, spec: BehaviorConfig | None) -> RawData:
@@ -167,12 +155,14 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
             save_stage(h5, "C", c, csv=cfg.save_csv, full_precision=a.abet is not None)
         progress(0.55)
 
-        marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=b)
+        selected = configured_markers(a, cfg.peth, processed=b)
+        marker, onsets = selected.label, selected.times
         summary = {"file": path.name, "fs_raw_hz": a.abet_native.fs if a.abet_native is not None else a.fs,
                    "fs_data_A_hz": a.fs, "fs_processed_hz": b.fs,
                    "duration_s": float(a.time[-1] - a.time[0]),
                    "indicator": a.indicator, "indicator_source": a.indicator_source, "dff_unit": b.unit,
-                   "dedrift_method": b.method, "marker": marker, "n_markers": int(len(onsets))}
+                   "dedrift_method": b.method, "marker": marker, "marker_sources": list(selected.sources),
+                   "n_markers": int(len(onsets))}
 
         if b.signal_start_s is not None:
             summary["signal_interval_s"] = [b.signal_start_s, b.signal_end_s]
@@ -188,7 +178,7 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         if a.abet is not None:
             log(f"ABET · {summary['abet_mode']} · {summary['abet_trials']} trials · {out / 'abet'}")
         if marker:
-            p = analysis.peri_event(b, onsets, cfg.peth, marker)
+            p = selected.analyze(b, cfg.peth)
             res.peth = p
             log(tr("log_peth", lang, marker=marker, n=len(p.trials)))
             if p.skipped_incomplete_pre:

@@ -24,13 +24,14 @@ from .. import __version__, analysis, plotting
 from ..config import PipelineConfig
 from ..io_tdms import auto_map, find_event_file, inspect_tdms, is_event_file
 from ..recordings import device_traces
-from ..pipeline import attach_abet, attach_behavior, pick_marker, read_with_behavior, run_batch, run_file
+from ..pipeline import attach_abet, attach_behavior, read_with_behavior, run_batch, run_file
+from ..stimulus_markers import configured_markers
 from ..abet import AbetConfig
 from ..abet_batch import find_abet_sidecar
 from .abet import AbetDialog
 from .behavior import BehaviorDialog
 from .event_table import EventTableModel
-from .responsive import COMPACT_TAB_STYLE, ResponsivePanels
+from .responsive import ResponsivePanels, SectionTabs, style_tabs
 from .dialog_layout import confirm_details
 from .baseline import BaselinePicker
 from ..preprocess import (DataWarning, decay_time_constant, dedrift, deconvolve, format_dff_formula,
@@ -144,8 +145,8 @@ class MainWindow(QMainWindow):
         if short != self._short_window:
             self._short_window = short
             self.log_dock.setVisible(not short)
-            for tabs in (self.tabs, self.peth_views):
-                tabs.tabBar().setStyleSheet(COMPACT_TAB_STYLE if short else "")
+            style_tabs(self.tabs, workflow=True, compact=short or narrow)
+            style_tabs(self.peth_views, compact=short)
             for label, help_button in self.page_help:
                 label.setVisible(not short)
                 help_button.setVisible(short)
@@ -273,6 +274,7 @@ class MainWindow(QMainWindow):
         self.clear_buttons = {}
         self.page_help = []
         self.tabs = QTabWidget()
+        style_tabs(self.tabs, workflow=True)
         self.tabs.addTab(_scroll(self._tab_read()), "")
         self.tabs.widget(0).verticalScrollBar().rangeChanged.connect(
             self._reveal_read_shortcut, Qt.QueuedConnection)
@@ -284,12 +286,11 @@ class MainWindow(QMainWindow):
     def _analysis_panels(self, controls, plots):
         split = QSplitter(Qt.Horizontal)
         split.setChildrenCollapsible(False)
-        form = _scroll(controls)
-        split.addWidget(form)
+        split.addWidget(controls)
         split.addWidget(plots)
         split.setStretchFactor(1, 1)
         split.setSizes([400, 760])
-        return ResponsivePanels(split, [form, plots], [("参数", "Parameters"), ("结果图", "Plots")],
+        return ResponsivePanels(split, [controls, plots], [("参数", "Parameters"), ("结果图", "Plots")],
                                 min_width=max(840, 56 * self.fontMetrics().height()), min_height=320)
 
     # tab ① ----------------------------------------------------------------
@@ -300,6 +301,8 @@ class MainWindow(QMainWindow):
         controls = QWidget()
         inputs = QVBoxLayout(controls)
         inputs.setContentsMargins(0, 0, 0, 0)
+        associations = QWidget()
+        association_layout = QVBoxLayout(associations)
         behavior_row = QHBoxLayout()
         self.b_behavior = QPushButton(clicked=self.pick_behavior_csv)
         self.b_behavior_clear = QPushButton(clicked=lambda: self.set_behavior(None))
@@ -314,14 +317,15 @@ class MainWindow(QMainWindow):
         behavior_row.addWidget(self.b_behavior)
         behavior_row.addWidget(self.b_behavior_clear)
         behavior_row.addWidget(self.lbl_behavior, 1)
-        inputs.addLayout(behavior_row)
+        association_layout.addLayout(behavior_row)
         abet_row = QHBoxLayout()
         abet_row.addWidget(self.b_abet)
         abet_row.addWidget(self.b_abet_clear)
         abet_row.addWidget(self.lbl_abet, 1)
-        inputs.addLayout(abet_row)
+        association_layout.addLayout(abet_row)
+        association_layout.addStretch()
 
-        self.chan_box = QGroupBox()
+        self.chan_box = QWidget()
         cl = QVBoxLayout(self.chan_box)
         self.chan_table = QTableWidget(0, 6)
         self.chan_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -341,12 +345,17 @@ class MainWindow(QMainWindow):
         exclusions.addStretch()
         cl.addLayout(exclusions)
 
-        self.map_box = QGroupBox()
+        self.map_box = QWidget()
         map_layout = QVBoxLayout(self.map_box)
-        f = QFormLayout()
-        map_layout.addLayout(f)
-        map_layout.addStretch()
-        f.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        signal_page, marker_page = QWidget(), QWidget()
+        f = QFormLayout(signal_page)
+        marker_form = QFormLayout(marker_page)
+        for form in (f, marker_form):
+            form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            form.setContentsMargins(4, 4, 4, 4)
+        self.mapping_tabs = SectionTabs([(signal_page, ("荧光信号", "Fluorescence")),
+                                         (marker_page, ("事件标记", "Markers"))])
+        map_layout.addWidget(self.mapping_tabs)
         self.cb_group = QComboBox()
         self.cb_group.currentIndexChanged.connect(self._fill_channel_combos)
         self.cb_signal = QComboBox()
@@ -377,15 +386,15 @@ class MainWindow(QMainWindow):
         self.lbl_indicator = QLabel()
         self.indicator_edit = QLineEdit()
         f.addRow(self.lbl_indicator, self.indicator_edit)
-        f.addRow(self.lbl_map[3], self.lst_markers)
+        marker_form.addRow(self.lbl_map[3], self.lst_markers)
         f.addRow(self.lbl_map[4], self.fs_edit)
         f.addRow(self.lbl_fs_missing)
-        f.addRow(self.lbl_map[5], mf)
+        marker_form.addRow(self.lbl_map[5], mf)
         self.b_read = _primary(QPushButton(clicked=self.step_read))
 
         self.lbl_markers_found = QLabel()
         self.lbl_markers_found.setWordWrap(True)
-        f.addRow(self.lbl_markers_found)
+        marker_form.addRow(self.lbl_markers_found)
         channel_split = QSplitter(Qt.Horizontal)
         channel_split.setChildrenCollapsible(False)
         channel_split.addWidget(self.chan_box)
@@ -398,8 +407,14 @@ class MainWindow(QMainWindow):
 
         self.fig_raw = FigureView()
         self.baseline_picker = BaselinePicker(self)
-        inputs.addWidget(self.channel_panels, 1)
-        inputs.addWidget(self.baseline_picker)
+        intervals = QWidget()
+        interval_layout = QVBoxLayout(intervals)
+        interval_layout.addWidget(self.baseline_picker)
+        interval_layout.addStretch()
+        self.read_settings = SectionTabs([(self.channel_panels, ("通道", "Channels")),
+                                          (associations, ("行为数据", "Behavior")),
+                                          (intervals, ("选区与 TTL", "Intervals and TTL"))])
+        inputs.addWidget(self.read_settings, 1)
         inputs.addWidget(self.b_read)
         split = QSplitter(Qt.Vertical)
         split.setChildrenCollapsible(False)
@@ -421,24 +436,33 @@ class MainWindow(QMainWindow):
         left = QWidget()
         lv = QVBoxLayout(left)
         self.b_choose_windows = QPushButton(clicked=self._choose_windows)
-        lv.addWidget(self.b_choose_windows)
-        self.box_dedrift = QGroupBox()
-        self.form_dedrift = ParamForm(DEDRIFT)
+        self.form_dedrift = ParamForm(DEDRIFT, sections=[
+            ("lowpass_hz", "downsample_hz", "poly_order", "highpass_hz", "output"),
+            ("auto_trim", "trim_start_s", "trim_end_s")])
         self.form_dedrift.changed.connect(self.baseline_picker.refresh)
         self.form_dedrift.editors["prefer_plexon_dff"].toggled.connect(self._sync_dff_source)
         self.form_dedrift.editors["method"].currentIndexChanged.connect(self._sync_dff_source)
-        QVBoxLayout(self.box_dedrift).addWidget(self.form_dedrift)
-        self.box_deconv = QGroupBox()
         self.form_deconv = ParamForm(DECONV)
-        QVBoxLayout(self.box_deconv).addWidget(self.form_deconv)
-        self.b_pre = _primary(QPushButton(clicked=self.step_pre))
+        baseline = QWidget()
+        baseline_layout = QVBoxLayout(baseline)
+        baseline_layout.setContentsMargins(3, 3, 3, 3)
+        baseline_layout.addWidget(self.b_choose_windows)
+        baseline_layout.addWidget(self.form_dedrift)
+        baseline_layout.addStretch()
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
         self.lbl_pre = QLabel()
         self.lbl_pre.setWordWrap(True)
-        lv.addWidget(self.box_dedrift)
-        lv.addWidget(self.box_deconv)
+        details_layout.addWidget(self.lbl_pre)
+        details_layout.addStretch()
+        self.pre_settings = SectionTabs([(baseline, ("基线", "Baseline")),
+                                        (self.form_dedrift.sections[0], ("滤波", "Filtering")),
+                                        (self.form_dedrift.sections[1], ("裁剪", "Trim")),
+                                        (self.form_deconv, ("反卷积", "Deconvolution")),
+                                        (details, ("摘要", "Summary"))])
+        self.b_pre = _primary(QPushButton(clicked=self.step_pre))
+        lv.addWidget(self.pre_settings, 1)
         lv.addWidget(self.b_pre)
-        lv.addWidget(self.lbl_pre)
-        lv.addStretch(1)
 
         self.fig_dedrift = FigureView()
         self.fig_deconv = FigureView()
@@ -460,29 +484,33 @@ class MainWindow(QMainWindow):
         self.help_peth = self._page_header(v, "peth")
         left = QWidget()
         lv = QVBoxLayout(left)
-        self.box_peth = QGroupBox()
-        bl = QVBoxLayout(self.box_peth)
+        timing = QWidget()
+        bl = QVBoxLayout(timing)
         mrow = QFormLayout()
         mrow.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.lbl_marker_use = QLabel()
         self.cb_marker_use = QComboBox()
         mrow.addRow(self.lbl_marker_use, self.cb_marker_use)
         bl.addLayout(mrow)
-        self.form_peth = ParamForm(PETH)
+        self.form_peth = ParamForm(PETH, sections=[("response_start_s", "response_end_s", "peak_direction")])
         bl.addWidget(self.form_peth)
+        bl.addStretch()
         self.b_peth = _primary(QPushButton(clicked=self.step_peth))
-        lv.addWidget(self.box_peth)
-        lv.addWidget(self.b_peth)
         from .abet_comparison import compare_abet
         self.b_abet_compare = QPushButton(clicked=lambda: compare_abet(self))
-        lv.addWidget(self.b_abet_compare)
-        self.box_trials = QGroupBox()
-        tl = QVBoxLayout(self.box_trials)
         self.trial_table = QTableWidget(0, 0)
         self.trial_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.trial_table.verticalHeader().setVisible(False)
-        tl.addWidget(self.trial_table)
-        lv.addWidget(self.box_trials, 1)
+        trials = QWidget()
+        trials_layout = QVBoxLayout(trials)
+        trials_layout.setContentsMargins(3, 3, 3, 3)
+        trials_layout.addWidget(self.trial_table, 1)
+        trials_layout.addWidget(self.b_abet_compare)
+        self.peth_settings = SectionTabs([(timing, ("刺激与基线", "Stimulus and baseline")),
+                                         (self.form_peth.sections[0], ("响应", "Response")),
+                                         (trials, ("试次", "Trials"))])
+        lv.addWidget(self.peth_settings, 1)
+        lv.addWidget(self.b_peth)
 
         self.fig_peth = FigureView()
         self.fig_peth_dff = FigureView()
@@ -510,15 +538,10 @@ class MainWindow(QMainWindow):
         self.help_events = self._page_header(v, "events")
         left = QWidget()
         lv = QVBoxLayout(left)
-        self.box_events = QGroupBox()
         self.form_events = ParamForm(EVENTS)
-        QVBoxLayout(self.box_events).addWidget(self.form_events)
         self.b_events = _primary(QPushButton(clicked=self.step_events))
         self.lbl_events = QLabel()
         self.lbl_events.setWordWrap(True)
-        lv.addWidget(self.box_events)
-        lv.addWidget(self.b_events)
-        lv.addWidget(self.lbl_events)
         self.event_table = QTableView()
         self.event_model = EventTableModel(self.event_table)
         self.event_table.setModel(self.event_model)
@@ -526,9 +549,17 @@ class MainWindow(QMainWindow):
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.event_table.horizontalHeader().setResizeContentsPrecision(0)
         self.event_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        lv.addWidget(self.event_table, 1)
+        event_list = QWidget()
+        event_layout = QVBoxLayout(event_list)
+        event_layout.setContentsMargins(3, 3, 3, 3)
+        event_layout.addWidget(self.lbl_events)
+        event_layout.addWidget(self.event_table, 1)
         self.b_export_events = QPushButton(clicked=self.export_event_table)
-        lv.addWidget(self.b_export_events)
+        event_layout.addWidget(self.b_export_events)
+        self.event_settings = SectionTabs([(self.form_events, ("检测参数", "Detection")),
+                                          (event_list, ("事件列表", "Events table"))])
+        lv.addWidget(self.event_settings, 1)
+        lv.addWidget(self.b_events)
 
         self.fig_events = FigureView()
         self.fig_dist = FigureView()
@@ -554,9 +585,11 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         self.help_export = self._page_header(v, "export")
-        self.box_out = QGroupBox()
-        f = QFormLayout(self.box_out)
+        output, batch = QWidget(), QWidget()
+        f = QFormLayout(output)
         f.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        batch_form = QFormLayout(batch)
+        batch_form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         orow = QHBoxLayout()
         self.out_dir = QLineEdit(self.settings.value("out_dir", ""))
         self.b_out = QPushButton(clicked=self.pick_out_dir)
@@ -589,16 +622,20 @@ class MainWindow(QMainWindow):
         manifest_row.addWidget(self.abet_manifest, 1)
         manifest_row.addWidget(self.b_manifest)
         manifest_row.addWidget(self.b_manifest_template)
-        f.addRow(self.lbl_manifest, manifest_row)
-        v.addWidget(self.box_out)
+        batch_form.addRow(self.lbl_manifest, manifest_row)
 
         brow = QGridLayout()
         self.b_export = _primary(QPushButton(clicked=self.export_current))
         self.b_batch = _primary(QPushButton(clicked=self.run_batch))
         self.b_cancel = QPushButton(clicked=self.cancel)
         self.b_open_out = QPushButton(clicked=self.open_out_dir)
-        for i, button in enumerate((self.b_export, self.b_batch, self.b_open_out, self.b_cancel)):
-            brow.addWidget(button, i // 2, i % 2)
+        f.addRow(self.b_export)
+        batch_form.addRow(self.b_batch)
+        self.export_settings = SectionTabs([(output, ("输出设置", "Output settings")),
+                                           (batch, ("批处理", "Batch"))])
+        v.addWidget(self.export_settings, 1)
+        brow.addWidget(self.b_open_out, 0, 0)
+        brow.addWidget(self.b_cancel, 0, 1)
         v.addLayout(brow)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -608,7 +645,6 @@ class MainWindow(QMainWindow):
         self.lbl_export.setWordWrap(True)
         self.lbl_export.setTextInteractionFlags(Qt.TextSelectableByMouse)
         v.addWidget(self.lbl_export)
-        v.addStretch(1)
         return w
 
     def _build_log(self):
@@ -630,7 +666,9 @@ class MainWindow(QMainWindow):
         if lang == self.lang and self.windowTitle():
             self._sync_lang_controls()
             return
+        self._store_marker_choice()
         self.lang = lang
+        self._refresh_marker_choices()
         self.settings.setValue("lang", lang)
         self.cb_fig_lang.setCurrentIndex(0 if lang == "zh" else 1)  # exported figures follow the interface
         self.retranslate()
@@ -659,7 +697,7 @@ class MainWindow(QMainWindow):
         self.files_box.setTitle(t("files"))
         self.file_menu_button.setText(t("files"))
         self.a_compact_remove.setText(t("btn_remove"))
-        for panels in self.findChildren(ResponsivePanels):
+        for panels in [*self.findChildren(ResponsivePanels), *self.findChildren(SectionTabs)]:
             panels.set_lang(self.lang)
         for _, help_button in self.page_help:
             help_button.setText("页面说明" if self.lang == "zh" else "Page help")
@@ -682,7 +720,6 @@ class MainWindow(QMainWindow):
             button.setText(t("clear_page"))
             button.setToolTip(t(f"clear_{page}_tip"))
         # tab 1
-        self.chan_box.setTitle(t("channels"))
         self.b_exclude.setText(t("exclude_channels"))
         self.b_exclude.setToolTip(t("exclude_channels_tip"))
         self.b_restore.setText(t("restore_channels"))
@@ -690,7 +727,6 @@ class MainWindow(QMainWindow):
                                                                   "col_fs", "col_guess", "col_preview")])
         self.lbl_fs_missing.setText(t("fs_missing"))
         self._fill_channel_table()
-        self.map_box.setTitle(t("mapping"))
         for lab, k in zip(self.lbl_map, ("lbl_group", "lbl_signal", "lbl_control", "lbl_markers", "lbl_fs",
                                          "lbl_marker_file")):
             lab.setText(t(k))
@@ -706,30 +742,27 @@ class MainWindow(QMainWindow):
         self._show_markers_found()
         # tab 2
         self.b_choose_windows.setText(t("choose_windows"))
-        self.box_dedrift.setTitle(t("grp_dedrift"))
-        self.box_deconv.setTitle(t("grp_deconv"))
         self.b_pre.setText(t("btn_pre"))
         for f in (self.form_dedrift, self.form_deconv, self.form_peth, self.form_events):
             f.set_lang(self.lang)
         # tab 3
-        self.box_peth.setTitle(t("grp_peth"))
         self.lbl_marker_use.setText(t("lbl_marker_use"))
+        self.cb_marker_use.setToolTip("可单选一种打标，也可选择“文件打标名 + 手动 TTL”合并分析。"
+                                     if self.lang == "zh" else
+                                     "Select one series, or choose a file marker + manual TTL to combine them.")
         self.b_peth.setText(t("btn_peth"))
         self.b_abet_compare.setText("Compare ABET groups…" if self.lang == "en"
                                     else "比较 ABET 声音与进槽分组…")
         self.b_abet_compare.setToolTip(
             "Requires preprocessed calcium resampled to the ABET interval. Baseline −3 to 0 s, response 0 to 3 s."
             if self.lang == "en" else "先读取 ABET 数据并预处理重采样后的钙信号。逐试次基线 −3 至 0 秒，响应窗 0 至 3 秒。")
-        self.box_trials.setTitle(t("trial_table"))
         self.peth_views.setTabText(0, t("view_z"))
         self.peth_views.setTabText(1, t("view_dff"))
         # tab 4
-        self.box_events.setTitle(t("grp_events"))
         self.b_events.setText(t("btn_events"))
         self.b_export_events.setText(t("export_event_table"))
         self._show_event_summary()
         # tab 5
-        self.box_out.setTitle(t("grp_out"))
         for lab, k in zip(self.lbl_out, ("lbl_outdir", "lbl_formats", "lbl_dpi", "lbl_fig_lang", "lbl_csv")):
             lab.setText(t(k))
         self.b_out.setText(t("browse"))
@@ -830,6 +863,7 @@ class MainWindow(QMainWindow):
         self._store_dedrift()
         for f in (self.form_deconv, self.form_peth, self.form_events):
             f.store(self.cfg)
+        self.cfg.peth.pre_s = self.cfg.peth.post_s = None
         ch = self.cfg.channels
         ch.group = self.cb_group.currentText()
         ch.indicator = self.indicator_edit.text().strip()
@@ -852,7 +886,7 @@ class MainWindow(QMainWindow):
         ch.sampling_rate = self.fs_edit.value()
         ch.marker_file = self.marker_file.text()
         if self.A is not None:
-            self.cfg.peth.marker = self.cb_marker_use.currentText()
+            self._store_marker_choice()
         pc = self.cfg.plot
         pc.formats = [f for f, c in self.chk_fmt.items() if c.isChecked()] or ["png"]
         pc.dpi = self.spin_dpi.value()
@@ -1212,7 +1246,7 @@ class MainWindow(QMainWindow):
             return
         key = str(self.current.resolve())
         raw = self.A
-        selected = self.cb_marker_use.currentText()
+        self._store_marker_choice()
 
         if raw is not None and raw.abet is not None and session is not None:
             info = raw.abet.info
@@ -1229,9 +1263,8 @@ class MainWindow(QMainWindow):
             self.cfg.abet_by_recording[key] = spec
             if aligned is not None:
                 self.A = aligned
-                self.cfg.peth.marker = selected
                 self._refresh_marker_choices()
-                self.cfg.peth.marker = self.cb_marker_use.currentText()
+                self._store_marker_choice()
                 # The source samples and clock can both change when linking a session.
                 self.B = self.C = self.peth = self.events = self.stim_events = None
                 self.lbl_pre.clear()
@@ -1310,17 +1343,18 @@ class MainWindow(QMainWindow):
                 return
             points = [*points, timestamp]
         old_label = self.A.manual_ttl_label
-        selected = self.cb_marker_use.currentText()
+        self._store_marker_choice()
+        used_manual = self.cfg.peth.include_manual_ttl or self.cfg.peth.marker == old_label
         self.A = self.A.with_manual_ttl(points)
         if points:
             self.cfg.manual_ttl_by_recording[key] = points
         else:
             self.cfg.manual_ttl_by_recording.pop(key, None)
-        self.cfg.peth.marker = selected
         self._refresh_marker_choices()
-        self.cfg.peth.marker = self.cb_marker_use.currentText()
-        peth_changed = self.peth is not None and self.peth.marker == old_label
-        comparison_changed = self.stim_events is not None and self.stim_events.attrs.get("marker") == old_label
+        self._store_marker_choice()
+        peth_changed = self.peth is not None and old_label in (self.peth.marker_sources or (self.peth.marker,))
+        comparison_changed = self.stim_events is not None and old_label in self.stim_events.attrs.get(
+            "marker_sources", (self.stim_events.attrs.get("marker"),))
         if peth_changed:
             self.peth = None
             self._fill_trial_table()
@@ -1331,9 +1365,9 @@ class MainWindow(QMainWindow):
             self.fig_rate.set_figure(None)
         plotting.update_manual_ttl_overlay(self.fig_raw.canvas.figure.axes, self.A)
         self.fig_raw.canvas.draw_idle()
-        overlays_changed = (selected == old_label or self.cfg.peth.marker == self.A.manual_ttl_label)
+        overlays_changed = used_manual or self.cfg.peth.marker == self.A.manual_ttl_label
         if self.B is not None and overlays_changed:
-            _, times = pick_marker(self.A, self.cfg.peth.marker, self.cfg.peth.align_to, self.cfg.peth.shift_s, processed=self.B)
+            times = configured_markers(self.A, self.cfg.peth, processed=self.B).times
             for view, axis in ((self.fig_dedrift, 1), (self.fig_deconv, 0), (self.fig_events, 0)):
                 if view.canvas is not None:
                     plotting.set_stimulus_lines(view.canvas.figure.axes[axis], times)
@@ -1439,7 +1473,9 @@ class MainWindow(QMainWindow):
         if not self.lbl_fs_missing.isHidden() and cfg.channels.sampling_rate is None:
             QMessageBox.information(self, self.t("app_title"), self.t("need_fs"))
             self.read_panels.select(0)
+            self.read_settings.setCurrentIndex(0)
             self.channel_panels.select(1)
+            self.mapping_tabs.setCurrentIndex(0)
             self.fs_edit.spin.setFocus()
             return
         self.lbl_fs_missing.hide()
@@ -1463,6 +1499,7 @@ class MainWindow(QMainWindow):
     def _choose_windows(self):
         self.tabs.setCurrentIndex(0)
         self.read_panels.select(0)
+        self.read_settings.setCurrentIndex(0 if self.A is None else 2)
         target = self.b_read if self.A is None else self.baseline_picker.signal_button
         target.setFocus()
         self._reveal_read_shortcut()
@@ -1551,36 +1588,37 @@ class MainWindow(QMainWindow):
         if not self._need("file", "A", "B"):
             return
         cfg = self.forms_store()
-        marker, onsets = pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=self.B)
-        if not marker:
+        selected = configured_markers(self.A, cfg.peth, processed=self.B)
+        if not selected.label:
             QMessageBox.information(self, self.t("app_title"), self.t("no_markers"))
             return
         b = self.B
 
         def done(p):
             self.peth = p
-            self.log(plotting_tr("log_peth", self.lang, marker=marker, n=len(p.trials)))
+            self.log(plotting_tr("log_peth", self.lang, marker=selected.label, n=len(p.trials)))
             if p.skipped_incomplete_pre:
                 self.log(plotting_tr("log_nonfinite_pre", self.lang, n=p.skipped_incomplete_pre))
             self._fill_trial_table()
             self.redraw_all()
             self.peth_panels.select(1)
 
-        self._run(lambda: analysis.peri_event(b, onsets, cfg.peth, marker), done)
+        self._run(lambda: selected.analyze(b, cfg.peth), done)
 
     def step_events(self):
         if not self._need("file", "A", "B", "C"):
             return
         cfg = self.forms_store()
         b, c, a = self.B, self.C, self.A
-        marker, onsets = pick_marker(a, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=b)
+        selected = configured_markers(a, cfg.peth, processed=b)
 
         def work():
             ev = analysis.detect_events(c, b, cfg.events)
-            sdf = (analysis.events_around_stimuli(ev, onsets, cfg.events.compare_window_s, b.time[0], b.time[-1])
-                   if marker else None)
+            sdf = (analysis.events_around_stimuli(ev, selected.times, cfg.events.compare_window_s, b.time[0], b.time[-1])
+                   if selected.label else None)
             if sdf is not None:
-                sdf.attrs["marker"] = marker
+                sdf.attrs["marker"] = selected.label
+                sdf.attrs["marker_sources"] = selected.sources
             return ev, sdf
 
         def done(out):
@@ -1593,13 +1631,33 @@ class MainWindow(QMainWindow):
 
         self._run(work, done)
 
+    def _store_marker_choice(self):
+        combo = self.cb_marker_use
+        if combo.currentIndex() >= 0:
+            self.cfg.peth.marker = combo.currentData()
+            self.cfg.peth.include_manual_ttl = bool(combo.currentData(Qt.UserRole + 1))
+
     def _refresh_marker_choices(self):
-        cur = self.cfg.peth.marker
-        self.cb_marker_use.clear()
-        if self.A is not None:
-            self.cb_marker_use.addItems(list(self.A.markers))
-            if cur in self.A.markers:
-                self.cb_marker_use.setCurrentText(cur)
+        combo = self.cb_marker_use
+        cfg = self.cfg.peth
+        combo.clear()
+        if self.A is None:
+            return
+        manual = self.A.manual_ttl_label
+        for label in self.A.markers:
+            combo.addItem(label, label)
+        if cfg.marker in self.A.markers:
+            combo.setCurrentIndex(combo.findData(cfg.marker))
+        if manual:
+            suffix = "手动 TTL" if self.lang == "zh" else "manual TTL"
+            for label in self.A.markers:
+                if label == manual:
+                    continue
+                combo.addItem(f"{label} + {suffix}", label)
+                index = combo.count() - 1
+                combo.setItemData(index, True, Qt.UserRole + 1)
+                if cfg.include_manual_ttl and cfg.marker == label:
+                    combo.setCurrentIndex(index)
 
     def _draw_peth_comparisons(self):
         if self.peth is None or not len(self.peth.trials):
@@ -1619,12 +1677,19 @@ class MainWindow(QMainWindow):
                 "peak_baseline_dff", "peak_dff", "auc_baseline_dff", "auc_target_dff"]
         heads = ["col_trial", "col_onset", "col_latency", "col_peak_baseline_z", "col_peak_z", "col_aucb_z", "col_auct_z",
                  "col_peak_baseline_dff", "col_peak_dff", "col_aucb_dff", "col_auct_dff"]
+        headers = [self.t(h) for h in heads]
+        if "marker_source" in m:
+            cols.insert(2, "marker_source")
+            headers.insert(2, "打标来源" if self.lang == "zh" else "Marker source")
         self.trial_table.setColumnCount(len(cols))
-        self.trial_table.setHorizontalHeaderLabels([self.t(h) for h in heads])
+        self.trial_table.setHorizontalHeaderLabels(headers)
         self.trial_table.setRowCount(len(m))
         for r, row in enumerate(m.reindex(columns=cols).itertuples(index=False)):
             for c, v in enumerate(row):
-                txt = str(int(v)) if c == 0 else f"{v:.3g}"
+                if cols[c] == "marker_source":
+                    txt = {"file": "文件", "manual": "手动", "file+manual": "文件和手动"}.get(v, v) if self.lang == "zh" else v
+                else:
+                    txt = str(int(v)) if c == 0 else f"{v:.3g}"
                 it = QTableWidgetItem(txt)
                 it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.trial_table.setItem(r, c, it)
@@ -1663,7 +1728,7 @@ class MainWindow(QMainWindow):
         plotting.setup_style(lang)
         cfg = self.cfg
         # Full-trace overlays include stimuli even when a peri-event trial is dropped.
-        onsets = (pick_marker(self.A, cfg.peth.marker, cfg.peth.align_to, cfg.peth.shift_s, processed=self.B)[1]
+        onsets = (configured_markers(self.A, cfg.peth, processed=self.B).times
                   if self.A is not None else ())
 
         def put(view, make):

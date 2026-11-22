@@ -57,13 +57,21 @@ class ParamForm(QWidget):
 
     changed = Signal()
 
-    def __init__(self, specs: list[ParamSpec], parent=None):
+    def __init__(self, specs: list[ParamSpec], parent=None, *, sections=()):
         super().__init__(parent)
         self.specs = specs
-        self.form = QFormLayout(self)
-        self.form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        self.form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        self.form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # All sections share the same editors and dependency bindings. Only
+        # their presentation is separated, so saving/loading remains atomic.
+        self.sections = [QWidget() for _ in sections]
+        forms = [QFormLayout(page) for page in (self, *self.sections)]
+        for form in forms:
+            form.setContentsMargins(4, 4, 4, 4)
+            form.setVerticalSpacing(4)
+            form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            form.setFormAlignment(Qt.AlignTop | Qt.AlignLeft)
+        field_sections = {key: index + 1 for index, keys in enumerate(sections) for key in keys}
         self.labels: dict[str, QLabel] = {}
         self.editors: dict[str, QWidget] = {}
         for s in specs:
@@ -71,7 +79,7 @@ class ParamForm(QWidget):
             lab = QLabel()
             self.labels[s.name] = lab
             self.editors[s.name] = ed
-            self.form.addRow(lab, ed)
+            forms[field_sections.get(s.name, 0)].addRow(lab, ed)
         self.changed.connect(self._apply_depends)
 
     def _make_editor(self, s: ParamSpec) -> QWidget:

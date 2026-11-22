@@ -96,6 +96,7 @@ def test_peth_shows_response(dataset, tmp_path):
     _, paths = dataset
     res = run_file(paths[0], PipelineConfig(), tmp_path, make_figures=False)
     p = res.peth
+    np.testing.assert_allclose(p.t_rel[[0, -1]], [-5, 5])
     assert p.trials.shape[0] == len(truth(paths[0])["stimulus_onsets_s"])
     for kind in ("z", "dff"):
         assert (p.metrics[f"auc_target_{kind}"] > p.metrics[f"auc_baseline_{kind}"]).mean() > 0.9
@@ -125,12 +126,22 @@ def test_peth_shows_response(dataset, tmp_path):
 
 def test_outputs_and_backups(dataset, tmp_path):
     folder, _ = dataset
-    cfg = PipelineConfig()
+    cfg = PipelineConfig.from_dict({"peth": {"pre_s": 20, "post_s": 10, "baseline_start_s": -4,
+                                            "baseline_end_s": -1, "response_start_s": -2, "response_end_s": 3}})
     cfg.plot.formats = ["png"]
     cfg.plot.dpi = 72
     results = run_batch([folder], cfg, tmp_path)
     assert len(results) == 2 and not any(r.error for r in results)
     out = results[0].out_dir
+    for result in results:
+        np.testing.assert_allclose(result.peth.t_rel[[0, -1]], [-4, 3])
+        params = json.loads((result.out_dir / "parameters.json").read_text(encoding="utf-8"))["peth"]
+        assert (params["trial_start_s"], params["trial_end_s"]) == (-4, 3)
+        assert {"pre_s", "post_s"}.isdisjoint(params)
+        methods = json.loads((result.out_dir / "analysis_methods.json").read_text(encoding="utf-8"))
+        reported = next(s["parameters"] for s in methods["stages"] if s["id"] == "peth")
+        np.testing.assert_allclose(reported["sampled_range_s"], [-4, 3])
+        assert reported["trial_window_source"] == "baseline_and_target"
     for f in ["summary.json", "parameters.json", "events.csv", "peth_metrics.csv",
               "peth_trials_z.csv", "peth_trials_dff.csv", f"{out.name}_dataB.csv",
               "figures/04_peth_heatmap_z.png", "figures/04_peth_heatmap_dff.png", "figures/05_auc_baseline_target.png",
