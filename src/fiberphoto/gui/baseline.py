@@ -97,6 +97,7 @@ class BaselinePicker(QWidget):
 
     def refresh(self):
         raw = self.host.A
+        self.setVisible(raw is not None)
         ready = self.canvas is not None and raw is not None and not self.host._busy
         fields = self.host.form_dedrift.editors
         cancel = self.tr2("取消框选", "Cancel selection")

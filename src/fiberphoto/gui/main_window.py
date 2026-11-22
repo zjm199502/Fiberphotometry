@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PySide6.QtCore import QSettings, QSize, QStandardPaths, Qt, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QBoxLayout, QCheckBox, QComboBox, QDockWidget, QFileDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDockWidget, QFileDialog,
                                QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
@@ -139,7 +139,6 @@ class MainWindow(QMainWindow):
         self.file_compact.setVisible(narrow)
         self.file_sidebar.setVisible(not narrow)
         compact_read = event.size().width() < max(1080, 68 * self.fontMetrics().height())
-        self.read_groups.setDirection(QBoxLayout.TopToBottom if compact_read else QBoxLayout.LeftToRight)
         self.baseline_picker.set_compact(compact_read or self.lang == "en")
         short = event.size().height() < 540
         if short != self._short_window:
@@ -320,10 +319,6 @@ class MainWindow(QMainWindow):
         abet_row.addWidget(self.lbl_abet, 1)
         inputs.addLayout(abet_row)
 
-        top = QWidget()
-        h = QHBoxLayout(top)
-        self.read_groups = h
-        h.setContentsMargins(0, 0, 0, 0)
         self.chan_box = QGroupBox()
         cl = QVBoxLayout(self.chan_box)
         self.chan_table = QTableWidget(0, 6)
@@ -343,10 +338,12 @@ class MainWindow(QMainWindow):
         exclusions.addWidget(self.b_restore)
         exclusions.addStretch()
         cl.addLayout(exclusions)
-        h.addWidget(self.chan_box, 3)
 
         self.map_box = QGroupBox()
-        f = QFormLayout(self.map_box)
+        map_layout = QVBoxLayout(self.map_box)
+        f = QFormLayout()
+        map_layout.addLayout(f)
+        map_layout.addStretch()
         f.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.cb_group = QComboBox()
         self.cb_group.currentIndexChanged.connect(self._fill_channel_combos)
@@ -387,29 +384,30 @@ class MainWindow(QMainWindow):
         self.lbl_markers_found = QLabel()
         self.lbl_markers_found.setWordWrap(True)
         f.addRow(self.lbl_markers_found)
-        h.addWidget(self.map_box, 2)
+        channel_split = QSplitter(Qt.Horizontal)
+        channel_split.setChildrenCollapsible(False)
+        channel_split.addWidget(self.chan_box)
+        channel_split.addWidget(self.map_box)
+        channel_split.setSizes([600, 440])
+        self.channel_panels = ResponsivePanels(
+            channel_split, [self.chan_box, self.map_box],
+            [("通道", "Channels"), ("通道设置", "Channel settings")],
+            min_width=max(750, 49 * self.fontMetrics().height()), fit_contents=True)
 
         self.fig_raw = FigureView()
         self.baseline_picker = BaselinePicker(self)
-        inputs.addWidget(top, 1)
+        inputs.addWidget(self.channel_panels, 1)
         inputs.addWidget(self.baseline_picker)
-        control_scroll = _scroll(controls)
-        control_scroll.setMinimumHeight(6 * self.fontMetrics().height())
-        self.read_controls = control_scroll
-        top_panel = QWidget()
-        top_layout = QVBoxLayout(top_panel)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.addWidget(control_scroll, 1)
-        top_layout.addWidget(self.b_read)
+        inputs.addWidget(self.b_read)
         split = QSplitter(Qt.Vertical)
         split.setChildrenCollapsible(False)
-        split.addWidget(top_panel)
+        split.addWidget(controls)
         split.addWidget(self.fig_raw)
         self.fig_raw.setMinimumHeight(14 * self.fontMetrics().height())
-        split.setSizes([340, 400])
-        self.read_panels = ResponsivePanels(split, [top_panel, self.fig_raw],
+        split.setStretchFactor(1, 1)
+        self.read_panels = ResponsivePanels(split, [controls, self.fig_raw],
                                            [("通道与选区", "Channels and intervals"), ("原始预览", "Raw preview")],
-                                           min_width=790, min_height=430)
+                                           min_width=790, fit_contents=True)
         v.addWidget(self.read_panels, 1)
         return w
 
@@ -1438,6 +1436,8 @@ class MainWindow(QMainWindow):
         path = self.current
         if not self.lbl_fs_missing.isHidden() and cfg.channels.sampling_rate is None:
             QMessageBox.information(self, self.t("app_title"), self.t("need_fs"))
+            self.read_panels.select(0)
+            self.channel_panels.select(1)
             self.fs_edit.spin.setFocus()
             return
         self.lbl_fs_missing.hide()
@@ -1464,7 +1464,7 @@ class MainWindow(QMainWindow):
         if self.A is None:
             self.b_read.setFocus()
         else:
-            self.read_controls.ensureWidgetVisible(self.baseline_picker.signal_button)
+            self.tabs.widget(0).ensureWidgetVisible(self.baseline_picker.signal_button)
             self.baseline_picker.signal_button.setFocus()
 
     def _confirm_preprocessing(self, raw, cfg):
