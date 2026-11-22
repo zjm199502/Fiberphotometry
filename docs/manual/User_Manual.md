@@ -45,6 +45,10 @@ After installing, open **Help → Check for updates**, download the patch and re
 
 In a narrow window or at high display scaling, switch between parameters and plots within each analysis page. Run the analysis, then select the waveform, heatmap or statistics view. Widen the window to see panels side by side. Legends below the traces identify the events. The plot toolbar provides zoom and save controls.
 
+The dark blue tab marks the current step. On the load page, choose Channels to set up fluorescence and file markers, Behavior to import a CSV or ABET file, or Intervals and TTL to select time ranges and add markers. In Peri-event, Stimulus and baseline selects the markers and baseline window. Response sets the target window and peak direction. Trials shows individual results and opens the ABET group comparison.
+
+Double-click text, a line, a marker, or a heatmap in a preview. You can edit titles, axis and legend labels, font size, series colors and heatmap color maps. Use Edit on the toolbar to select crowded elements by name. The toolbar save button exports the figure as displayed. Saving parameters preserves appearance edits for each recording. Restore figure defaults resets the current figure.
+
 ![Main window after start-up](img/en_00_start.png)
 
 - **Recordings (left)**: add files, add a folder, load the sample data, remove. Click a file in the list to make it the current recording.
@@ -77,6 +81,8 @@ In the figure, blue is the calcium signal, orange is the control and the vertica
 
 To annotate a known stimulus time, click **Add TTL points**, then click the waveform preview. Each mark snaps to the nearest recorded frame. Continue marking, undo the latest point, or press Esc to finish. Select **Manual TTL** as the marker in the Peri-event tab. Save parameters to retain the annotations for this recording.
 
+To fill gaps in a recorded stimulus series, choose **the file marker name + manual TTL** in the peri-event marker list. Recorded pulses use the chosen edge and manual points use their clicked time. A click and a file edge on the same nearest recording frame count once, at the file timestamp. The `marker_source` column of `peth_metrics.csv` identifies each trial as `file`, `manual`, or `file+manual`.
+
 ### Step 3: ② Preprocess
 
 Open **② Preprocess** and click **Run preprocessing** (the defaults are fine).
@@ -101,6 +107,8 @@ Click the **ΔF/F** tab above the figure to see the same analysis in ΔF/F:
 
 ![Peri-event (ΔF/F)](img/en_05_peth_dff.png)
 
+Open **Trials → Plot data bundle** to save the current result. The ZIP includes each trial’s centred ΔF/F and baseline-window Z scores, relative time, mean, SEM, peak, AUC and paired statistics. Import the CSV files into R, Python or Origin, or extract the archive and run `replot.py` according to the included instructions.
+
 ### Step 5: ④ Events
 
 Open **④ Events** and click **Run event detection**.
@@ -110,6 +118,8 @@ Open **④ Events** and click **Run event detection**.
 - Red triangles mark detected events; the red dashed line in the small panel is the spike threshold (default 0.8 × noise σ).
 - The three lower figures show the amplitude distribution, the interval distribution and the event rate before vs after stimuli.
 - The event table lists peak time, amplitude, AUC, detection time, integration limits and baseline. Click **Export current events CSV** to save the displayed run. Amplitude is the height of the denoised peak above the event baseline. The signed AUC integrates the denoised trace relative to the same baseline using the sample timestamps, in trace units × seconds.
+
+In the Events page, **Events table → Plot data bundle** exports timestamped fluorescence, denoised traces, inferred activity, event peaks, thresholds and histogram bins. The bundle includes pre/post rates when valid stimulation comparisons exist. Recording-wide Z scores use the mean and population standard deviation of finite processed ΔF/F values. Peri-event Z scores use each individual trial’s baseline window. Conversion parameters and units are in `metadata.json`.
 
 ### Step 6: ⑤ Export & batch
 
@@ -187,13 +197,12 @@ Deconvolution uses the **de-drifted ΔF/F (data B, before low-pass)**, not the r
 | Parameter | Default | Meaning |
 |---|---|---|
 | Stimulus time | TTL start | Use **TTL end** for shock experiments (see 5.3). |
-| Time before / after | 5 s / 10 s | The window cut for each trial (heatmap x-axis). |
 | Baseline start / end | −5 s / 0 s | Sets the window for z-scores and baseline AUC. ΔF/F centring uses the full pre-stimulus duration. |
 | Target window start / end | 0 s / 5 s | Window for the target AUC and the peak. |
 | Peak direction | Positive | Select positive for increases and negative for decreases. Both windows and the response latency use this direction. |
 | Merge interval | 0 s | Markers closer than this count as one (removes duplicate markers). |
 
-All times are in seconds relative to the stimulus; negative means before.
+The epoch covers both windows and stimulus time zero. With the default settings, the heatmap and average trace span −5 to +5 seconds. Change the target end to 8 seconds and rerun the analysis to extend both plots to +8 seconds. All times are relative to the stimulus, in seconds.
 
 Each **centred ΔF/F** trial is ΔF/F(t) − m, where m is the mean of all pre-stimulus samples (t < 0) in that trial. The sample at stimulus time zero is excluded. The heatmap, average, ΔF/F peak and AUC all use this centred trace in the original data B units. The value subtracted from each trial is recorded in the `prestimulus_mean_input_dff` column of `peth_metrics.csv`. Z-scores use the configured baseline window’s mean and sample standard deviation. AUC uses trapezoidal integration.
 

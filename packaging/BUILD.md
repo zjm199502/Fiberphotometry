@@ -21,6 +21,7 @@ Push the project to a GitHub repository; the workflow tests and builds a Windows
 
 ```bash
 python -m pip install -e ".[gui]" pyinstaller
+python src/fiberphoto/render_sources.py
 pyinstaller packaging/fiberphoto.spec --noconfirm
 ```
 

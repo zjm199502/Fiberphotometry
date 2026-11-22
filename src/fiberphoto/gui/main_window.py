@@ -1748,7 +1748,7 @@ class MainWindow(QMainWindow):
             if self.peth is None:
                 return
             views = dict(peth_native=self.fig_peth_dff, peth_z=self.fig_peth, comparisons=self.fig_auc)
-            results = dict(peth=self.peth)
+            results = dict(peth=self.peth, active_comparison="z" if self.peth_views.currentIndex() == 0 else "dff")
         else:
             if self.events is None or self.C is None:
                 return
@@ -1769,7 +1769,8 @@ class MainWindow(QMainWindow):
             self.error(str(exc))
             return
         raw, processed = self.A, self.B
-        self._run(lambda: export_plot_bundle(path, raw, processed, captured, **results),
+        lang = self.lang
+        self._run(lambda: export_plot_bundle(path, raw, processed, captured, language=lang, **results),
                   lambda _: self.log(self.t("export_done", path=path)))
 
     # -------------------------------------------------------------- figures

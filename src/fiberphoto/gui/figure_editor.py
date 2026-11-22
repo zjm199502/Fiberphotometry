@@ -18,6 +18,8 @@ def edit_figure(view, event=None):
     form = QFormLayout()
     layout.addLayout(form)
     select = QComboBox()
+    select.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    select.setMinimumContentsLength(24)
     select.addItems([" ".join(e.name.split()) for e in entries])
     form.addRow("Element" if en else "图中元素", select)
     content = QPlainTextEdit()
@@ -63,6 +65,18 @@ def edit_figure(view, event=None):
     select.setCurrentIndex(index)
     load(index)
     buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    buttons.button(QDialogButtonBox.Ok).setText("OK" if en else "确定")
+    buttons.button(QDialogButtonBox.Cancel).setText("Cancel" if en else "取消")
+    reset = buttons.addButton("Restore figure defaults" if en else "恢复本图默认外观", QDialogButtonBox.ResetRole)
+    reset.setEnabled(bool(view.figure_edits))
+    def restore_appearance():
+        for original, values in view.original_appearance.values():
+            original.apply(values)
+        view.original_appearance.clear()
+        view.figure_edits.clear()
+        view.canvas.draw_idle()
+        dialog.reject()
+    reset.clicked.connect(restore_appearance)
     layout.addWidget(buttons)
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
@@ -72,6 +86,7 @@ def edit_figure(view, event=None):
                   "cmap": palette.currentText()}
         changes = {key: edited[key] for key, previous in entry.values().items() if edited[key] != previous}
         if changes:
+            view.original_appearance.setdefault(entry.key, (entry, entry.values()))
             entry.apply(changes)
             view.figure_edits.setdefault(entry.key, {}).update(changes)
             view.canvas.draw_idle()

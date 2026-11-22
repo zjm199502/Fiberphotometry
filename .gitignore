@@ -5,3 +5,4 @@ build/
 dist/
 installer/
 examples/sample_data/
+src/fiberphoto/gui/assets/renderer-source.zip

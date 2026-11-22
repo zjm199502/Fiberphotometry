@@ -8,13 +8,15 @@ import numpy as np
 import pandas as pd
 import pytest
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QMessageBox, QPlainTextEdit, QPushButton
+from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QLabel,
+                               QMessageBox, QPlainTextEdit, QPushButton)
 
 from fiberphoto.gui import main_window
 from fiberphoto.gui.abet import AbetDialog
 from fiberphoto.gui.abet_comparison import compare_abet
 from fiberphoto.gui.app import STYLE
 from fiberphoto.gui.behavior import BehaviorDialog
+from fiberphoto.gui.figure_editor import edit_figure
 from fiberphoto.gui.widgets import FigureView
 from fiberphoto.preprocess import dedrift
 from test_gui_layout import _legend_geometry, _reachable, _reveal
@@ -91,6 +93,14 @@ def test_native_dialog_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lang
             assert geometry["visible_axes_dip"][0][0] > 90
             assert geometry["visible_axes_dip"][0][1] > 40
             details["plot"] = geometry
+        elif name == "figure-editor":
+            selector = dialog.findChild(QComboBox)
+            text = dialog.findChild(QPlainTextEdit)
+            size = dialog.findChild(QDoubleSpinBox)
+            assert selector.count() and _reachable(selector, dialog)
+            # The opaque viewport paints the text editor's contents and is
+            # excluded from the parent QAbstractScrollArea's visibleRegion().
+            assert _reachable(text.viewport(), dialog) and _reachable(size, dialog)
         else:
             review = dialog.findChild(QPlainTextEdit)
             assert review.isReadOnly() and "Synthetic channel" in review.toPlainText()
@@ -115,10 +125,13 @@ def test_native_dialog_layout(qtbot, qapp, tmp_path, abet_xml, monkeypatch, lang
     # as modal native windows and laid out, painted and checked normally.
     monkeypatch.setattr(QDialog, "exec", lambda dialog: inspect("comparison", dialog))
     compare_abet(window)
+    _reveal(window.fig_raw)
+    monkeypatch.setattr(QDialog, "exec", lambda dialog: inspect("figure-editor", dialog))
+    edit_figure(window.fig_raw)
     monkeypatch.setattr(QDialog, "exec", lambda dialog: inspect("pre-confirmation", dialog))
     monkeypatch.setattr(QMessageBox, "question", lambda *_: pytest.fail("Long confirmation should use a scrollable review"))
     window.A.channel_names["signal"] = " / ".join(f"Synthetic channel segment {i}" for i in range(55))
     assert not window._confirm_preprocessing(window.A, window.forms_store().for_recording(recording, raw=window.A))
-    assert set(report) == {"behavior", "abet", "comparison", "pre-confirmation"}
+    assert set(report) == {"behavior", "abet", "comparison", "figure-editor", "pre-confirmation"}
     (artifacts / f"{backend}-{lang}-dialogs.json").write_text(json.dumps(report, ensure_ascii=False, indent=2),
                                                             encoding="utf-8")

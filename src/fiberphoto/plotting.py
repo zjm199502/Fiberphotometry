@@ -223,7 +223,7 @@ def fig_peth(p: PethResult, lang: str = "zh", cmap: str = "RdBu_r", cfg_peth=Non
         cb.set_label(label)
         cb.outline.set_visible(False)
     ax1.axvline(0, color=INK, lw=0.8)
-    ax1.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
+    ax1.yaxis.set_major_locator(matplotlib.ticker.MaxNLocator(nbins="auto", integer=True))
     ax1.tick_params(labelbottom=True)
     ax1.set_ylabel(tr("trial", lang))
     ax1.set_title(fill(f"{tr('heatmap_title', lang)} · {p.marker}", 38), loc="left")

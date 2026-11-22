@@ -32,6 +32,8 @@ Plexon 的 `Frame,time,RawF_1,F0_1,R_1` 以及按波长和光纤编号的导出�
 
 在“数据读取”页读取波形后，选择“添加 TTL 事件点”，在预览图内单击时间位置。软件将各点对齐到最近的原始采样帧。按 Esc 结束添加，可以逐个撤销。手动标记按文件保存到参数中，在刺激锁定页选择 `Manual TTL` 即可据此对齐试次。
 
+如需把补标与已有刺激一起分析，在“③ 刺激锁定分析 → 对齐的打标”中选择“文件打标名 + 手动 TTL”。例如原刺激通道叫 Untitled，就选“Untitled + 手动 TTL”。同一采样帧上的文件打标和手动点算一次，保留文件边沿时刻。导出的 `peth_metrics.csv` 在 `marker_source` 中逐试次注明文件、手动或两者重合。
+
 撤销最后一个手动点并重新导出到同一目录时，本次不再生成的旧手动标记结果会归档到 `previous-manual-ttl-*` 子目录。软件通过上次方法报告识别这些文件，并保留内容已被手动编辑的文件。
 
 事件检测页可查看每个事件的峰时间、幅值、AUC、基线及积分起止时间。点击“导出当前事件表 CSV”可保存屏幕上的检测结果。完整导出的 `events.csv` 使用相同字段。AUC 使用去噪信号减去事件基线后的带符号梯形积分，单位为原纵轴单位 × 秒。
@@ -63,6 +65,18 @@ Fiber photometry (calcium imaging) analysis for photometry recordings: a batch-p
 core plus a bilingual (Chinese/English) desktop app for users without programming experience.
 
 钙成像光纤记录分析软件：批处理核心 + 中英双语桌面界面，面向没有编程基础的使用者。
+
+## FiberLume 0.6.8 更新公告
+
+- 五个主流程页签和读取页的“通道与选区 / 原始预览”加强了边框和选中提示。窗口变小时，参数与结果可以分开查看。从预处理返回框选信号区间时，按钮会完整显示并获得焦点。
+- 刺激锁定分析自动按基线窗和目标窗截取每个试次。默认基线 −5～0 秒、目标 0～5 秒，对应图中 −5～+5 秒。调整任一窗口后重新运行，预览和导出使用相同区间。
+- 文件打标可以和当前记录的手动 TTL 一起用于刺激锁定。同帧重合点只计一次，逐试次表标明事件来源。原有的单独分析方式仍可选择。
+- 双击预览图中的标题、轴标签、图例、曲线或热图即可编辑文字、字号、系列颜色或热图色带。工具栏的“编辑”也可以按名称选择元素。用该图的保存按钮即可导出编辑后的图。
+- 第 ③ 页的“试次”和第 ④ 页的“事件列表”增加“绘图数据包”导出。每个 ZIP 包含全分辨率 ΔF/F、Z 分数、时间坐标、计算参数和独立重绘脚本。刺激锁定包保留逐试次曲线、峰值和 AUC，事件包保留去噪轨迹、检测阈值、峰标记以及分布和频率比较数据。
+
+已安装 0.6.0–0.6.7 的用户可以在“帮助 → 检查更新”下载补丁，然后重启 FiberLume。网络受限时，可以使用相同版本的离线更新包。
+
+[查看可转发的完整更新公告](packaging/releases/0.6.8.md)
 
 ## 0.6.7 软件内更新
 
@@ -144,7 +158,7 @@ fiberphoto-gui            # 或 python -m fiberphoto.gui ；加 --en 以英文�
 English: [docs/manual/User_Manual.md](docs/manual/User_Manual.md)。软件内“帮助 → 用户手册”可直接打开 PDF。
 修改手册后运行 `python docs/manual/build_pdf.py <chromium>` 重新生成 PDF。
 
-![peri-event tab](docs/screenshots/gui_peth_zh.png)
+![刺激锁定页合并文件打标和手动 TTL 后的热图、峰值与 AUC](docs/manual/img/zh_04_peth_z.png)
 
 ### 打包成可执行文件 / Building the app
 
@@ -194,7 +208,8 @@ Python:
 ```python
 from fiberphoto import PipelineConfig, run_file
 cfg = PipelineConfig()
-cfg.peth.pre_s, cfg.peth.post_s = 5, 10
+cfg.peth.baseline_start_s, cfg.peth.baseline_end_s = -5, 0
+cfg.peth.response_start_s, cfg.peth.response_end_s = 0, 5
 res = run_file("mouse01_session1.tdms", cfg, "results", log=print)
 res.peth.metrics, res.events.summary
 ```
@@ -205,8 +220,9 @@ res.peth.metrics, res.events.summary
 results/<文件名>/
   <文件名>.h5                 data A / B / C 备份（HDF5）
   <文件名>_dataA.csv, _dataB.csv, _dataC.csv, _dataA_markers.csv
-  peth_trials.csv            逐试次刺激锁定曲线 + 均值、SEM
-  peth_metrics.csv           每个试次的 AUC、峰值、潜伏期
+  peth_trials_dff.csv        逐试次归零 ΔF/F 曲线、均值和 SEM
+  peth_trials_z.csv          逐试次 Z 分数曲线、均值和 SEM
+  peth_metrics.csv           每个试次的 AUC、峰值、潜伏期，合并打标时另含来源
   events.csv                 每个事件的时间、幅度、半宽、间隔
   events_vs_stimulus.csv     每次刺激前后的事件数和频率
   summary.json               汇总指标

@@ -19,7 +19,8 @@ def style_tabs(tabs, *, workflow=False, compact=False):
         QTabBar::tab:hover {{ background: #e4effa; border-color: #406a95; }}
         QTabBar::tab:selected {{ background: {color}; color: {ink}; border-color: #225d98;
             font-weight: 600; }}
-        QTabBar::tab:selected:focus {{ border: 2px solid #aa6500; }}
+        QTabBar::tab:selected:focus {{ border: 1px dashed #713b00;
+            background: #ffedbb; color: #402600; }}
         QTabBar::tab:disabled {{ color: #65727e; background: #f0f1f3; border-color: #b4bec7; }}
     """)
 

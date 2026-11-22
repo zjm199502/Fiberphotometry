@@ -146,6 +146,17 @@ def _legend_geometry(view):
         if tight is not None and not (frame.x0 - 1 <= tight.x0 <= tight.x1 <= frame.x1 + 1
                                       and frame.y0 - 1 <= tight.y0 <= tight.y1 <= frame.y1 + 1):
             errors.append(f"axis text outside figure: {list(tight.bounds)} in {list(frame.bounds)}")
+        for labels in (ax.get_xticklabels(), ax.get_yticklabels()):
+            previous = None
+            for label in labels:
+                if not label.get_visible() or not label.get_text() or label.get_rotation() % 180:
+                    continue
+                bounds = label.get_window_extent(renderer)
+                if previous:
+                    overlap = Bbox.intersection(previous[1], bounds)
+                    if overlap is not None and min(overlap.width, overlap.height) > dpr:
+                        errors.append(f"overlapping tick labels: {previous[0]!r}, {label.get_text()!r}")
+                previous = label.get_text(), bounds
         left = canvas_origin.x() + ax.bbox.x0 / dpr
         right = canvas_origin.x() + ax.bbox.x1 / dpr
         top = canvas_origin.y() + (frame.y1 - ax.bbox.y1) / dpr

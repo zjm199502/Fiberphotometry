@@ -101,9 +101,11 @@ def figure_elements(fig, lang="en"):
     return elements
 
 
-def apply_figure_edits(fig, styles):
+def apply_figure_edits(fig, styles, originals=None):
     if not styles:
         return
     for entry in figure_elements(fig):
         if entry.key in styles:
+            if originals is not None:
+                originals[entry.key] = (entry, entry.values())
             entry.apply(styles[entry.key])

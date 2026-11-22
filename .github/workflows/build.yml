@@ -33,7 +33,9 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: pytest -q
       - name: Build
-        run: pyinstaller packaging/fiberphoto.spec --noconfirm
+        run: |
+          python src/fiberphoto/render_sources.py
+          pyinstaller packaging/fiberphoto.spec --noconfirm
       - name: Version
         shell: bash
         run: echo "VER=$(python -c 'import fiberphoto; print(fiberphoto.__version__)')" >> "$GITHUB_ENV"

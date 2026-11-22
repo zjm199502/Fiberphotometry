@@ -70,7 +70,7 @@ def test_visible_results_export_without_reanalysis(qtbot, tmp_path, monkeypatch)
             folder = tmp_path / page
             bundle.extractall(folder)
         subprocess.run([sys.executable, str(folder / "replot.py")], check=True, cwd=tmp_path, timeout=60)
-        assert len(list((folder / "redrawn").glob("*.png"))) >= 5
+        assert len(list((folder / "redrawn").glob("*.png"))) >= 4
     window.clear_page_results("events")
     assert not window.b_export_event_plot_data.isEnabled()
 
@@ -89,7 +89,7 @@ def test_physical_units_from_standardized_preprocessing(tmp_path):
     # A simulated legacy high-pass result has no stored filter details. The data conversion is unchanged.
     b.method = "isosbestic"
     b.formula_info.update(slope=1., intercept=0.)
-    export_plot_bundle(archive, raw, b, ({}, {}), events=ev, deconv=c)
+    export_plot_bundle(archive, raw, b, ({}, {}, {}), events=ev, deconv=c)
     with ZipFile(archive) as z:
         np.testing.assert_allclose(read(z, "fluorescence").signal_dff, signal * 2 + 4)
         e = read(z, "events")
@@ -98,7 +98,7 @@ def test_physical_units_from_standardized_preprocessing(tmp_path):
         meta = json.loads(z.read("metadata.json"))
         assert meta["threshold"]["dff"] == pytest.approx(ev.threshold * 2 + 4)
     p = analysis.peri_event(b, [10.], PethConfig())
-    export_plot_bundle(archive, raw, b, ({}, {}), peth=p)
+    export_plot_bundle(archive, raw, b, ({}, {}, {}), peth=p)
     with ZipFile(archive) as z:
         np.testing.assert_allclose(read(z, "trials_dff").trial_1, p.trials_dff[0] * 2)
         metrics = read(z, "trial_metrics")

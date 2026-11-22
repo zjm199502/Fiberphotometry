@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from copy import deepcopy
 from io import BytesIO, TextIOWrapper
 import json
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+import sys
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
@@ -17,28 +19,32 @@ from .analysis import paired_test
 from .method_report import _json_safe
 from .plotting import event_histogram_bins
 from .preprocess import format_dff_formula
-from .replot_script import SCRIPT
+from .render_sources import add_renderer
 
 
 def capture_views(views):
     """Capture the visible limits and reference images on the GUI thread."""
-    axes, images = {}, {}
+    axes, images, specs = {}, {}, {}
     for name, view in views.items():
         if view.canvas is None:
             continue
         figure = view.canvas.figure
+        figure.canvas.draw()
+        specs[name] = dict(size_inches=figure.get_size_inches().tolist(), dpi=figure.dpi,
+                           figure_edits=deepcopy(view.figure_edits))
         axes[name] = []
         for ax in figure.axes:
-            info = dict(xlim=ax.get_xlim(), ylim=ax.get_ylim(), xlabel=ax.get_xlabel(),
+            info = dict(xlim=ax.get_xlim(), ylim=ax.get_ylim(), position=ax.get_position().bounds, xlabel=ax.get_xlabel(),
                         ylabel=ax.get_ylabel(), title=ax.get_title(loc="left") or ax.get_title())
             if ax.images:
                 heat = ax.images[0]
                 info.update(cmap=heat.get_cmap().name, clim=heat.get_clim(), extent=heat.get_extent())
             axes[name].append(info)
-        image = BytesIO()
-        figure.savefig(image, format="png", dpi=120)
-        images[name] = image.getvalue()
-    return axes, images
+        for ext in ("png", "svg"):
+            image = BytesIO()
+            figure.savefig(image, format=ext, dpi=120)
+            images[f"{name}.{ext}"] = image.getvalue()
+    return axes, images, specs
 
 
 def _table(archive, name, data):
@@ -73,9 +79,8 @@ def _peth_tables(archive, p, b, scale, offset):
     for name in p.metrics:
         if name.endswith("_dff"):
             metrics[name.removesuffix("_dff") + "_native"] = p.metrics[name]
-            metrics[name] = p.metrics[name] * scale
+            metrics[name] = p.metrics[name] * scale + (offset if name == "prestimulus_mean_input_dff" else 0.)
     if len(p.onsets):
-        metrics["prestimulus_mean_input_dff"] += offset
         indices = np.searchsorted(b.time, p.onsets)
         metrics["alignment_sample"] = indices
         metrics["alignment_sample_time_s"] = b.time[indices]
@@ -147,16 +152,19 @@ def _event_tables(archive, ev, b, c, stim, overlays, scale, offset):
                 comparison_marker=stim.attrs.get("marker") if stim is not None else None)
 
 
-def export_plot_bundle(path, raw, b, views, *, peth=None, events=None, deconv=None, comparisons=None, overlays=()):
+def export_plot_bundle(path, raw, b, views, *, peth=None, events=None, deconv=None, comparisons=None,
+                       overlays=(), language="en", active_comparison="z"):
     """Write a complete ZIP transactionally; the caller supplies the current results."""
     path = Path(path)
     unit, scale, offset = _dff_scale(b)
-    axes, images = views
+    from importlib import metadata as pkg_metadata
+    axes, images, specs = views
     metadata = dict(schema_version=1, software="FiberLume", version=__version__, recording=Path(raw.source).name,
                     page="peth" if peth is not None else "events", fs=b.fs, analysis_unit=b.unit, dff_unit=unit,
                     dff_scale=scale, dff_offset=offset, preprocessing=b.method, formula_info=b.formula_info,
                     formula=format_dff_formula(raw, b, "en"), clock="ABET" if raw.abet is not None else "acquisition",
-                    axes=axes)
+                    axes=axes, views=specs, language=language, active_comparison=active_comparison,
+                    python=sys.version.split()[0])
     with NamedTemporaryFile(dir=path.parent, prefix=".fiberlume-", suffix=".tmp", delete=False) as handle:
         temp = Path(handle.name)
     try:
@@ -168,9 +176,19 @@ def export_plot_bundle(path, raw, b, views, *, peth=None, events=None, deconv=No
             archive.writestr("metadata.json", json.dumps(_json_safe(metadata), ensure_ascii=False, indent=2,
                                                          allow_nan=False))
             archive.writestr("README.txt", _GUIDE)
-            archive.writestr("replot.py", SCRIPT)
+            add_renderer(archive)
+            dependencies = ("matplotlib", "numpy", "pandas", "scipy", "h5py")
+            # Frozen builds may omit distribution metadata. Their loaded modules retain the version.
+            requirements = []
+            for package in dependencies:
+                try:
+                    version = pkg_metadata.version(package)
+                except pkg_metadata.PackageNotFoundError:
+                    version = getattr(sys.modules.get(package), "__version__", None)
+                requirements.append(f"{package}=={version}" if version else package)
+            archive.writestr("requirements.txt", "\n".join(requirements) + "\n")
             for name, image in images.items():
-                archive.writestr(f"preview/{name}.png", image)
+                archive.writestr(f"preview/{name}", image)
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
@@ -178,8 +196,10 @@ def export_plot_bundle(path, raw, b, views, *, peth=None, events=None, deconv=No
 
 _GUIDE = """FiberLume 绘图数据 / Plot data
 解压后可用 Excel、R、Prism 或 Python 打开 CSV。运行 python replot.py 可根据 CSV 和 metadata.json 独立重绘。
-Extract the ZIP, then run python replot.py with NumPy, pandas and Matplotlib installed. No FiberLume installation or network is required.
-preview/ contains reference images for the views present at export, including zoom. Axis limits, labels and heatmap colors are in metadata.json.
+Extract the ZIP into a single folder. Run python replot.py in a Python environment with the packages in requirements.txt.
+The bundled original renderer reads CSV tables and metadata, applies the saved element edits and axes, and writes redrawn SVG and PNG files.
+No FiberLume installation or network is required for rendering. Install the listed dependencies beforehand.
+preview/ contains editable SVGs and PNG reference images of the current views, including zoom. Axis limits, edits, language and colors are in metadata.json.
 Blank CSV values and JSON null denote undefined quantities. All times are seconds. All time-series data use full analysis resolution.
 
 刺激锁定 / Peri-event

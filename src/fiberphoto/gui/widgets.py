@@ -10,7 +10,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout,
-                               QLabel, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
+                               QLabel, QMainWindow, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
 from ..config import PipelineConfig
 from .texts import ParamSpec
@@ -320,6 +320,7 @@ class FigureView(QWidget):
         self.toolbar = None
         self.plot_size = QSize()
         self.figure_edits = {}
+        self.original_appearance = {}
         self.edit_language = "zh"
         self.placeholder = QLabel(placeholder)
         self.placeholder.setAlignment(Qt.AlignCenter)
@@ -354,7 +355,8 @@ class FigureView(QWidget):
         self.placeholder.hide()
         from ..figure_style import apply_figure_edits
         from .figure_editor import edit_figure
-        apply_figure_edits(fig, self.figure_edits)
+        self.original_appearance.clear()
+        apply_figure_edits(fig, self.figure_edits, self.original_appearance)
         self.canvas = PreviewCanvas(fig)
         # Keep tick labels, legends and data readable even in a compact splitter pane.
         # These sizes are Qt logical pixels, independent of the backing display scale.
@@ -395,7 +397,13 @@ class FigureView(QWidget):
         # chart may be slightly shorter; Matplotlib reflows its constrained layout.
         available = self.height() - self.toolbar.sizeHint().height() - self.lay.spacing()
         minimum_height = self.plot_size.height()
-        if available >= 250:
+        parent = self.parentWidget()
+        while parent and not isinstance(parent, QMainWindow):
+            parent = parent.parentWidget()
+        compact_window = parent and (parent.width() < 1100 or parent.height() < 600)
+        # Extremely small desktops retain a scrollable full drawing so a pair
+        # of stacked axes still has room for labels and a readable trace.
+        if available >= (395 if compact_window else 250):
             minimum_height = min(minimum_height, available)
         self.canvas.setMinimumSize(self.plot_size.width(), minimum_height)
 
