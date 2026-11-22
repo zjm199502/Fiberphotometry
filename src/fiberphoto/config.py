@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from .behavior import BehaviorConfig
+from .abet import AbetConfig
 
 
 @dataclass
@@ -111,6 +112,7 @@ class PipelineConfig:
     plot: PlotConfig = field(default_factory=PlotConfig)
     save_csv: bool = True           # CSV copies of data A/B/C next to the HDF5 file
     behavior_by_recording: dict[str, BehaviorConfig] = field(default_factory=dict)
+    abet_by_recording: dict[str, AbetConfig] = field(default_factory=dict)
     intervals_by_recording: dict[str, dict] = field(default_factory=dict)
     manual_ttl_by_recording: dict[str, list[float]] = field(default_factory=dict)  # acquisition seconds in click order
 
@@ -130,8 +132,9 @@ class PipelineConfig:
             if f.name not in d:
                 continue
             sub = f.default_factory() if callable(f.default_factory) else None  # type: ignore[misc]
-            if f.name == "behavior_by_recording":
-                kwargs[f.name] = {str(Path(p).resolve()): BehaviorConfig(**spec)
+            if f.name in ("behavior_by_recording", "abet_by_recording"):
+                config_type = BehaviorConfig if f.name == "behavior_by_recording" else AbetConfig
+                kwargs[f.name] = {str(Path(p).resolve()): config_type(**spec)
                                   for p, spec in d[f.name].items()}
             elif f.name == "manual_ttl_by_recording":
                 kwargs[f.name] = {str(Path(p).resolve()): list(points) for p, points in d[f.name].items()}

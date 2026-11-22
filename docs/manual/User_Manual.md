@@ -1,6 +1,6 @@
 # FiberLume Fiber Photometry Analysis · Manual for New Students
 
-> Version 0.6.4. Working through the sample data takes about 15 minutes.
+> Version 0.6.5. Working through the sample data takes about 15 minutes.
 
 ## Contents
 
@@ -131,7 +131,21 @@ Open **⑤ Export & batch**:
 - Markers can also come from a CSV/Excel table: click **Browse…** next to “Marker file”. Each row is one marker, with an `onset` column (seconds), an optional `offset` column and an optional `label` column (e.g. tone, shock).
 - Avoid special symbols in file paths.
 
+#### ABET cue and tray sessions
+
+Place each calcium recording next to its same-stem ABET XML, for example `mouse01.csv` and `mouse01.xml`. Open the ABET XML in Load data and inspect trials, cue, tray light, accepted tray entry and feeder commands. The feeder timestamp records the command sent by the task. Measuring consumption requires a separate observation.
+
+Choose a clock mapping for each recording. One measured pulse on both clocks gives an offset. Two corresponding rising edges also estimate relative clock rate. For rigs where the first `start #1` pulse starts acquisition, explicitly selecting the assumed-trigger mode places the pulse at first-frame time minus the assumed startup latency (default zero). The span difference between the first/last frames and the start/end pulses can include other effects such as a stop delay or clock drift. Behavior-only mode allows trial inspection and export while synchronization is pending.
+
+After preprocessing choose **Compare ABET cue and tray groups** in the peri-event tab. Standard cues are grouped by subsequent accepted response or timeout. Unusual simultaneous light and tone trials are reported separately. Each waveform is centered on its preceding 3 seconds; the mean, signed AUC and selected peak direction use 0 to 3 seconds. Compare the combined accepted tray entry and feeder command with isolated out-of-window tray entries. These session-level summaries preserve trial IDs and exclusions. Account for repeated trials within animals in downstream inference.
+
+Batch export takes per-recording settings or a synchronization manifest. Look under each session's `abet` directory for trials and clock information and under `locked` for mapped event metrics, traces and group summaries. Check the sync mode before pooling sessions.
+
+On the export tab use **Export manifest template** to write one row per recording, including any previously set anchors. Set `recording`, the optional `xml` path and `mode`. Choose `behavior_only` for native seconds or `disabled` to skip the association. For `assumed_trigger`, supply `latency_s` (zero for an unknown delay). For `offset`, enter the matching `abet_1_s` and `calcium_1_s`. For `affine`, also fill in `abet_2_s` and `calcium_2_s` for a later matched event. Load the manifest on the same tab, then run the batch. The root `batch_abet_groups.csv` includes per-session sample counts, sync modes, units and group means.
+
 ### 5.2 Three things to check when reading
+
+For batch timing checks, `batch_summary.csv` lists recording and pulse spans separately. With measured anchors and two boundary pulses, `abet_first_frame_minus_mapped_start_s` and `abet_last_frame_minus_mapped_end_s` give the signed time of the corresponding frame relative to the mapped pulse. A positive value means the frame came later. These columns stay blank for behavior-only and assumed-trigger sessions.
 
 1. **Sampling rate**: our lab records at **50 Hz**. If the file does not store its sampling rate, an orange note appears; enter `50` under **Sampling rate (Hz)**. “from file” means the rate stored in the file is used.
 2. **Channels**: use the Preview thumbnails to confirm the signal and control channels. If the guess is wrong, change it in the drop-down lists.

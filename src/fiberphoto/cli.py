@@ -22,6 +22,7 @@ def main(argv=None) -> int:
     r.add_argument("-o", "--out", default="results")
     r.add_argument("-c", "--config", help="parameters JSON")
     r.add_argument("--lang", choices=["zh", "en"])
+    r.add_argument("--abet-manifest", help="per-recording ABET clock mapping CSV")
 
     i = sub.add_parser("inspect", help="list channels and guessed roles")
     i.add_argument("file")
@@ -39,7 +40,7 @@ def main(argv=None) -> int:
         cfg = PipelineConfig.load(a.config) if a.config else PipelineConfig()
         if a.lang:
             cfg.plot.language = a.lang
-        results = run_batch(a.inputs, cfg, a.out, log=print)
+        results = run_batch(a.inputs, cfg, a.out, log=print, abet_manifest=a.abet_manifest, retain_results=False)
         return 1 if any(r.error for r in results) else 0
     if a.cmd == "inspect":
         from .recordings import inspect_recording

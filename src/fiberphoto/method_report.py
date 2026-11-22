@@ -70,7 +70,7 @@ def _reader(raw, cfg):
             refs.append("NumPy · interp")
     marker_file = cfg.channels.marker_file or (find_event_file(path) if family == ".tdms" else None)
     rules = [clock]
-    if any(label != raw.manual_ttl_label for label in raw.markers):
+    if set(raw.markers).difference(raw.abet_marker_names.values(), [raw.manual_ttl_label]):
         rules.append("标记来源按读取配置解析。记录中的采样 TTL 以 x > 阈值的上升沿/下降沿定时，自动阈值为 (min + max)/2；时间戳表直接读取事件时间。")
     params = {"format": family, "channels": channels, "indicator": raw.indicator,
               "indicator_source": raw.indicator_source, "samples": len(raw.time), "sampling_hz": raw.fs,
@@ -81,6 +81,9 @@ def _reader(raw, cfg):
         params["manual_ttl"] = {"label": raw.manual_ttl_label, "onsets_s": raw.markers[raw.manual_ttl_label]}
         rules.append("手动 TTL 由用户在原始预览图点击，时间吸附到最近采集帧并按秒保存。只纳入记录覆盖范围内的时间点。"
                      "每个点只有起始时刻，按终点对齐时沿用起始时刻。")
+    if raw.abet_marker_names:
+        params["abet_marker_labels"] = raw.abet_marker_names
+        rules.append("ABET 事件由行为时钟换算至本次钙采集时钟；时钟映射和依据见 ABET 阶段。")
     return _stage("read", "读取与通道", "recordings.read_recording / io_tdms.read_tdms", params, rules, refs)
 
 
@@ -261,6 +264,18 @@ def write_method_report(res, cfg):
     stages = [_reader(a, cfg)]
     if a.behavior is not None:
         stages.append(_behavior(a, b))
+    if a.abet is not None:
+        info = dict(a.abet.info)
+        info["xml"] = str(a.abet.session.path)
+        rules = ["试次和时间戳来源于关联 ABET XML 的声音、食槽灯、组切换、食槽传感器及给料器事件。",
+                 "原始行为时钟、试次纳入情况和记录号见 abet/abet_trials.csv；同步参数见 abet/abet_alignment.json。"]
+        if info["mode"] != "behavior_only":
+            info["locked_analysis"] = json.loads((res.out_dir / "abet/locked/analysis.json").read_text(encoding="utf-8"))
+            rules += ["采集时间 = offset_s + scale × ABET 时间。assumed_trigger 标记由触发关系推定的同步；"
+                      "offset 用一个实测锚点平移；affine 用两个实测锚点估计偏移及速率。",
+                      "逐事件以 −3 至 0 秒均值归零，在 0 至 3 秒计算均值、带符号梯形积分与指定方向峰值。"
+                      "有效进槽与给食指令作为复合事件解释；常规提示按响应/超时分组。"]
+        stages.append(_stage("abet", "ABET 行为试次与时钟同步", "abet.read_abet / abet.align_abet", info, rules))
     stages.append(_preprocess(a, b, cfg.dedrift, cfg.plot.language))
     if res.C is not None:
         stages.append(_deconv(res, cfg.deconv))
@@ -284,16 +299,20 @@ def write_method_report(res, cfg):
     # Never include associations or exclusion lists from other recordings in an export.
     key = str(Path(a.source).resolve())
     for mapping in [configured["channels"]["excluded_channels"], configured["behavior_by_recording"],
-                    configured["intervals_by_recording"], configured["manual_ttl_by_recording"]]:
+                    configured["intervals_by_recording"], configured["manual_ttl_by_recording"],
+                    configured["abet_by_recording"]]:
         for other in list(mapping):
             if other != key:
                 del mapping[other]
     report = _json_safe(dict(schema_version=1, recording=key, software=versions, stages=stages,
                              configured_parameters=configured))
+    from .marker_exports import marker_outputs, sha256
     if a.manual_ttl_label:
-        from .marker_exports import marker_outputs, sha256
         report["manual_ttl_output_sha256"] = {p.relative_to(res.out_dir).as_posix(): sha256(p)
                                              for p in sorted(marker_outputs(res, cfg, manual_only=True))}
+    if a.abet_marker_names:
+        outputs = marker_outputs(res, cfg, selected_labels=set(a.abet_marker_names.values()))
+        report["abet_marker_output_sha256"] = {p.relative_to(res.out_dir).as_posix(): sha256(p) for p in sorted(outputs)}
     def dump(value, indent=None):
         return json.dumps(value, indent=indent, ensure_ascii=False, allow_nan=False)
     (res.out_dir / "analysis_methods.json").write_text(dump(report, 2) + "\n", encoding="utf-8")

@@ -10,7 +10,10 @@ import dataclasses
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .abet import AbetResult
 
 import h5py
 import numpy as np
@@ -37,6 +40,8 @@ class RawData:
     behavior_native: dict[str, np.ndarray] = field(default_factory=dict)  # mapped timestamps and original values
 
     manual_ttl_label: str = ""  # name of the manually annotated point series in markers
+    abet: AbetResult | None = None  # runtime tables are exported separately in abet/
+    abet_marker_names: dict[str, str] = field(default_factory=dict)  # canonical label -> data A label
 
     def with_manual_ttl(self, times):
         markers = dict(self.markers)
@@ -130,6 +135,8 @@ def _write_group(h5: h5py.File, name: str, obj) -> None:
         del h5[name]
     g = h5.create_group(name)
     for k, v in vars(obj).items():
+        if k == "abet":
+            continue
         if isinstance(v, np.ndarray):
             g.create_dataset(k, data=v, compression="gzip")
         elif isinstance(v, dict):

@@ -7,8 +7,10 @@ moving on. ``run_file`` chains them for batch use.
 from __future__ import annotations
 
 import json
+import hashlib
 import traceback
 import warnings
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional
@@ -17,6 +19,8 @@ import numpy as np
 import pandas as pd
 
 from . import analysis, plotting
+from .abet import AbetConfig
+from .abet_batch import attach_abet, export_recording_abet, find_abet_sidecar, load_abet_manifest
 from .behavior import BehaviorConfig, align_behavior, load_behavior_csv
 from .config import ChannelConfig, PipelineConfig
 from .data import DeconvData, DffData, RawData, save_stage
@@ -55,6 +59,8 @@ def pick_marker(a: RawData, wanted: str, align: str = "onset", shift_s: float = 
     stimulus follows the pulse); pulses without a recorded end fall back to
     their onset. ``shift_s`` is then added to every time.
     """
+    if wanted and wanted.startswith("ABET:") and wanted not in a.markers:
+        return "", np.array([])  # A missing trial group has zero events in this recording.
     label = wanted if wanted and wanted in a.markers else next(
         (k for k, v in a.markers.items() if len(v)), "")
     if not label:
@@ -91,15 +97,31 @@ def read_with_behavior(path: str | Path, cfg: PipelineConfig) -> RawData:
     if cfg.manual_ttl_by_recording.get(key):
         raw = raw.with_manual_ttl(cfg.manual_ttl_by_recording[key])
     spec = cfg.behavior_by_recording.get(key)
-    return attach_behavior(raw, spec) if spec is not None else raw
+    if spec is not None:
+        raw = attach_behavior(raw, spec)
+    abet = cfg.abet_by_recording.get(key)
+    if abet is None:
+        sidecar = find_abet_sidecar(path)
+        if sidecar is not None:
+            abet = AbetConfig(path=str(sidecar.resolve()))
+    return attach_abet(raw, abet) if abet is not None else raw
 
 
 def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
              log: LogFn = _noop, progress: ProgressFn = _noop,
-             make_figures: bool = True) -> SessionResult:
+             make_figures: bool = True, *, distinguish_stem: bool = False) -> SessionResult:
     path = Path(path)
     lang = cfg.plot.language
     out = Path(out_root) / path.stem
+    if not distinguish_stem and (out / "analysis_methods.json").is_file():
+        try:
+            source = json.loads((out / "analysis_methods.json").read_text(encoding="utf-8")).get("recording")
+            distinguish_stem = bool(source and Path(source).resolve() != path.resolve())
+        except (AttributeError, TypeError, OSError, ValueError):
+            distinguish_stem = True
+    if distinguish_stem:
+        suffix = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+        out = out.with_name(f"{path.stem}--{suffix}")
     out.mkdir(parents=True, exist_ok=True)
     res = SessionResult(name=path.stem, out_dir=out)
     h5 = out / f"{path.stem}.h5"
@@ -151,6 +173,9 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
                                             "end_s": end, "n_samples": count, "median_f0": f0}
         if a.behavior is not None:
             summary["behavior"] = a.behavior_info
+        summary.update(export_recording_abet(a, b, out, cfg, make_figures))
+        if a.abet is not None:
+            log(f"ABET · {summary['abet_mode']} · {summary['abet_trials']} trials · {out / 'abet'}")
         if marker:
             p = analysis.peri_event(b, onsets, cfg.peth, marker)
             res.peth = p
@@ -219,6 +244,8 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         recording_channels = replace(cfg.channels, excluded_channels={key: exclusions[key]} if key in exclusions else {})
         windows = cfg.intervals_by_recording
         recording_cfg = replace(cfg, channels=recording_channels, behavior_by_recording=recording_behavior,
+                                abet_by_recording={key: cfg.abet_by_recording[key]} if key in cfg.abet_by_recording else
+                                ({key: AbetConfig(path=str(a.abet.session.path))} if a.abet is not None else {}),
                                 intervals_by_recording={key: windows[key]} if key in windows else {},
                                 manual_ttl_by_recording={key: cfg.manual_ttl_by_recording[key]}
                                 if key in cfg.manual_ttl_by_recording else {})
@@ -227,16 +254,17 @@ def run_file(path: str | Path, cfg: PipelineConfig, out_root: str | Path,
         if make_figures:
             res.figures = export_figures(res, cfg)
             log(tr("log_figs", lang, path=out / "figures"))
-        from .marker_exports import archive_superseded, superseded_manual_outputs
+        from .marker_exports import archive_superseded, superseded_manual_outputs, superseded_abet_outputs
         from .method_report import write_method_report
-        stale = superseded_manual_outputs(res, recording_cfg)
+        stale_abet = superseded_abet_outputs(res, recording_cfg)
+        stale = set(superseded_manual_outputs(res, recording_cfg)) | set(stale_abet)
         report_path = out / "analysis_methods.json"
         previous = report_path.read_bytes() if stale else None
         try:
             write_method_report(res, recording_cfg.for_recording(path))
             if stale:
-                archive = archive_superseded(out, stale)
-                log(f"已归档旧手动 TTL 结果 / Previous manual TTL outputs archived: {archive}")
+                archive = archive_superseded(out, stale, prefix="previous-abet-markers-") if stale_abet else archive_superseded(out, stale)
+                log(f"已归档旧打标结果 / Previous marker outputs archived: {archive}")
         except OSError:
             if previous is not None:
                 report_path.write_bytes(previous)  # Retain provenance for a retry after a locked file.
@@ -286,17 +314,17 @@ def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Pat
               log: LogFn = _noop, progress: ProgressFn = _noop,
               should_stop: Callable[[], bool] = lambda: False, *,
               mapping_source: Path | None = None,
-              recording_configs: dict[Path, PipelineConfig] | None = None) -> list[SessionResult]:
+              recording_configs: dict[Path, PipelineConfig] | None = None,
+              abet_manifest: str | Path | None = None, retain_results: bool = True) -> list[SessionResult]:
     files: list[Path] = []
     for i in inputs:
         i = Path(i)
         files += find_recordings(i) if i.is_dir() else [i]
     files = list(dict.fromkeys(p.resolve() for p in files))
-    stems = set()
-    for path in files:
-        if path.stem.casefold() in stems:
-            raise ValueError(f"Duplicate output folder '{path.stem}'. Run these recordings in separate output folders.")
-        stems.add(path.stem.casefold())
+    stems = Counter(path.stem.casefold() for path in files)
+    associations = load_abet_manifest(abet_manifest) if abet_manifest else {}
+    if abet_manifest and not any(str(path) in associations for path in files):
+        raise ValueError("同步清单与选中文件不匹配 / No selected recording matches the ABET manifest")
     results = []
     source_family = recording_family(mapping_source) if mapping_source else None
     for k, f in enumerate(files):
@@ -310,9 +338,28 @@ def run_batch(inputs: list[str | Path], cfg: PipelineConfig, out_root: str | Pat
             file_cfg = replace(cfg, channels=ChannelConfig(marker_threshold=cfg.channels.marker_threshold,
                                                            indicator=cfg.channels.indicator,
                                                            excluded_channels=cfg.channels.excluded_channels))
-        results.append(run_file(f, file_cfg, out_root, log, sub))
-    rows = [r.summary | {"file": r.name, "error": r.error} for r in results]
+        if str(f) in associations:
+            file_cfg = replace(file_cfg, abet_by_recording={str(f): associations[str(f)]})
+        result = run_file(f, file_cfg, out_root, log, sub, distinguish_stem=stems[f.stem.casefold()] > 1)
+        if not retain_results:
+            result.A = result.B = result.C = result.peth = result.events = result.stim_events = None
+        results.append(result)
+    rows = [r.summary | {"file": r.name, "recording_path": str(f), "output_directory": r.out_dir.name,
+                         "error": r.error} for r, f in zip(results, files)]
     if rows:
         Path(out_root).mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(Path(out_root) / "batch_summary.csv", index=False, float_format="%.6g")
+        groups = []
+        for res, row in zip(results, rows):
+            if res.error or row.get("abet_mode") not in ("offset", "affine", "assumed_trigger"):
+                continue
+            table = pd.read_csv(res.out_dir / "abet" / "locked" / "groups.csv")
+            groups.append(table.assign(recording_path=row["recording_path"], animal_id=row["abet_animal_id"],
+                                       sync_mode=row["abet_mode"], dff_unit=row["dff_unit"]))
+        group_file = Path(out_root) / "batch_abet_groups.csv"
+        if groups or group_file.exists():
+            group_table = (pd.concat(groups, ignore_index=True) if groups else
+                           pd.DataFrame(columns=["group", "n_candidates", "n_used", "mean_target_dff", "mean_signed_auc",
+                                                 "recording_path", "animal_id", "sync_mode", "dff_unit"]))
+            group_table.to_csv(group_file, index=False, float_format="%.12g")
     return results

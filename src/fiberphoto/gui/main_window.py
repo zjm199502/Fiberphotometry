@@ -24,7 +24,10 @@ from .. import __version__, analysis, plotting
 from ..config import PipelineConfig
 from ..io_tdms import auto_map, find_event_file, inspect_tdms, is_event_file
 from ..recordings import device_traces
-from ..pipeline import attach_behavior, pick_marker, read_with_behavior, run_batch, run_file
+from ..pipeline import attach_abet, attach_behavior, pick_marker, read_with_behavior, run_batch, run_file
+from ..abet import AbetConfig
+from ..abet_batch import find_abet_sidecar
+from .abet import AbetDialog, mode_label
 from .behavior import BehaviorDialog
 from .event_table import EventTableModel
 from .baseline import BaselinePicker
@@ -79,6 +82,7 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._workers = set()
         self.current: Path | None = None
+        self.abet_candidate: Path | None = None
         # A recording keeps its own batch settings after its in-memory data is cleared.
         self._loaded_once = False
         self.recording_states: dict[Path, RecordingViewState] = {}
@@ -113,7 +117,7 @@ class MainWindow(QMainWindow):
         # File-specific association maps are shared by the open session. Snapshot
         # just this view's settings; large analysis arrays are retained by reference.
         local = replace(cfg, channels=replace(cfg.channels, excluded_channels={}),
-                        behavior_by_recording={}, intervals_by_recording={}, manual_ttl_by_recording={})
+                        behavior_by_recording={}, abet_by_recording={}, intervals_by_recording={}, manual_ttl_by_recording={})
         self.recording_states[self.current] = RecordingViewState(
             deepcopy(local), (self.A, self.B, self.C, self.peth, self.events, self.stim_events),
             self.channel_infos, self.previews, self.tabs.currentIndex(),
@@ -123,6 +127,7 @@ class MainWindow(QMainWindow):
         channels = replace(local.channels, excluded_channels=self.cfg.channels.excluded_channels)
         return replace(local, channels=channels, plot=self.cfg.plot, save_csv=self.cfg.save_csv,
                        behavior_by_recording=self.cfg.behavior_by_recording,
+                       abet_by_recording=self.cfg.abet_by_recording,
                        intervals_by_recording=self.cfg.intervals_by_recording,
                        manual_ttl_by_recording=self.cfg.manual_ttl_by_recording)
 
@@ -235,10 +240,20 @@ class MainWindow(QMainWindow):
         self.lbl_behavior = QLabel()
         self.lbl_behavior.setTextFormat(Qt.PlainText)
         self.lbl_behavior.setWordWrap(True)
+        self.b_abet = QPushButton(clicked=self.pick_abet)
+        self.b_abet_clear = QPushButton(clicked=self.remove_abet)
+        self.lbl_abet = QLabel()
+        self.lbl_abet.setTextFormat(Qt.PlainText)
+        self.lbl_abet.setWordWrap(True)
         behavior_row.addWidget(self.b_behavior)
         behavior_row.addWidget(self.b_behavior_clear)
         behavior_row.addWidget(self.lbl_behavior, 1)
         v.addLayout(behavior_row)
+        abet_row = QHBoxLayout()
+        abet_row.addWidget(self.b_abet)
+        abet_row.addWidget(self.b_abet_clear)
+        abet_row.addWidget(self.lbl_abet, 1)
+        v.addLayout(abet_row)
 
         top = QWidget()
         h = QHBoxLayout(top)
@@ -378,6 +393,9 @@ class MainWindow(QMainWindow):
         self.b_peth = _primary(QPushButton(clicked=self.step_peth))
         lv.addWidget(self.box_peth)
         lv.addWidget(self.b_peth)
+        from .abet_comparison import compare_abet
+        self.b_abet_compare = QPushButton(clicked=lambda: compare_abet(self))
+        lv.addWidget(self.b_abet_compare)
         self.box_trials = QGroupBox()
         tl = QVBoxLayout(self.box_trials)
         self.trial_table = QTableWidget(0, 0)
@@ -478,6 +496,16 @@ class MainWindow(QMainWindow):
         f.addRow(self.lbl_out[2], self.spin_dpi)
         f.addRow(self.lbl_out[3], self.cb_fig_lang)
         f.addRow(self.lbl_out[4], self.chk_csv)
+        manifest_row = QHBoxLayout()
+        self.abet_manifest = QLineEdit()
+        self.abet_manifest.setClearButtonEnabled(True)
+        self.lbl_manifest = QLabel()
+        self.b_manifest = QPushButton(clicked=self.pick_abet_manifest)
+        self.b_manifest_template = QPushButton(clicked=self.save_abet_manifest_template)
+        manifest_row.addWidget(self.abet_manifest, 1)
+        manifest_row.addWidget(self.b_manifest)
+        manifest_row.addWidget(self.b_manifest_template)
+        f.addRow(self.lbl_manifest, manifest_row)
         v.addWidget(self.box_out)
 
         brow = QHBoxLayout()
@@ -596,6 +624,11 @@ class MainWindow(QMainWindow):
         self.box_peth.setTitle(t("grp_peth"))
         self.lbl_marker_use.setText(t("lbl_marker_use"))
         self.b_peth.setText(t("btn_peth"))
+        self.b_abet_compare.setText("Compare ABET cue and tray groups…" if self.lang == "en"
+                                    else "比较 ABET 声音与进槽分组…")
+        self.b_abet_compare.setToolTip(
+            "Requires preprocessed data and an ABET clock mapping. Baseline −3 to 0 s, response 0 to 3 s."
+            if self.lang == "en" else "先预处理并确认 ABET 时钟映射。逐试次基线 −3 至 0 秒，响应窗 0 至 3 秒。")
         self.box_trials.setTitle(t("trial_table"))
         self.peth_views.setTabText(0, t("view_z"))
         self.peth_views.setTabText(1, t("view_dff"))
@@ -609,6 +642,11 @@ class MainWindow(QMainWindow):
         for lab, k in zip(self.lbl_out, ("lbl_outdir", "lbl_formats", "lbl_dpi", "lbl_fig_lang", "lbl_csv")):
             lab.setText(t(k))
         self.b_out.setText(t("browse"))
+        self.lbl_manifest.setText("ABET 批处理同步清单" if self.lang == "zh" else "ABET batch clock manifest")
+        self.abet_manifest.setPlaceholderText("可选 CSV；按每条记录设置同步" if self.lang == "zh"
+                                             else "Optional CSV with per-recording clock settings")
+        self.b_manifest.setText(t("browse"))
+        self.b_manifest_template.setText("导出清单模板" if self.lang == "zh" else "Save template")
         self.b_export.setText(t("btn_export_one"))
         self.b_batch.setText(t("btn_batch"))
         self.b_cancel.setText(t("btn_cancel"))
@@ -820,6 +858,7 @@ class MainWindow(QMainWindow):
         self.lbl_export.clear()
         self.progress.reset()
         self.current = Path(item.data(Qt.UserRole)) if item is not None else None
+        self.abet_candidate = find_abet_sidecar(self.current) if self.current else None
         state = self.recording_states.pop(self.current, None)
         if state is not None:
             self._restore_recording(state)
@@ -988,6 +1027,7 @@ class MainWindow(QMainWindow):
             self.t("auto_paired", name=pair.name) if pair else (self.t("no_pair") if self.current else ""))
 
     def _sync_behavior(self):
+        self._sync_abet()
         key = str(self.current.resolve()) if self.current else None
         spec = self.cfg.behavior_by_recording.get(key)
         zh = self.lang == "zh"
@@ -1008,6 +1048,96 @@ class MainWindow(QMainWindow):
             status = (f"覆盖 {valid:,}/{total:,} 帧" if zh else f"{valid:,}/{total:,} frames covered")
         self.lbl_behavior.setText(f"{Path(spec.path).name} · {spec.value_column} · {status}")
         self.lbl_behavior.setToolTip(spec.path)
+
+    def _sync_abet(self):
+        zh = self.lang == "zh"
+        self.b_abet.setText("ABET 行为试次与同步…" if zh else "ABET trials and sync…")
+        self.b_abet.setEnabled(not self._busy)
+        self.b_abet_clear.setText("解除 ABET 关联" if zh else "Unlink ABET")
+        key = str(self.current.resolve()) if self.current else None
+        spec = self.cfg.abet_by_recording.get(key)
+        path = None
+        if spec is None:
+            path = self.abet_candidate if self.current else None
+        elif spec.mode != "disabled":
+            path = Path(spec.path)
+        self.b_abet_clear.setVisible(path is not None)
+        self.b_abet_clear.setEnabled(not self._busy)
+        self.lbl_abet.setToolTip(str(path) if path else "")
+        result = self.A.abet if self.A is not None else None
+        if result is not None:
+            n = len(result.trials)
+            label = mode_label(result.info["mode"], self.lang)
+            status = f"{n} 试次 · {label}" if zh else f"{n} trials · {label}"
+        elif spec is None:
+            status = "同名 XML · 仅行为" if zh else "Matching XML · behavior only"
+        else:
+            status = mode_label(spec.mode, self.lang)
+        self.lbl_abet.setText(f"{path.name} · {status}" if path else "")
+
+    def pick_abet(self):
+        if self._busy:
+            return
+        previous = self.cfg.abet_by_recording.get(str(self.current.resolve())) if self.current else None
+        path = Path(previous.path) if previous and previous.mode != "disabled" else self.abet_candidate
+        if path is None or not path.is_file():
+            folder = str(self.current.parent) if self.current else self.settings.value("last_dir", "")
+            path, _ = QFileDialog.getOpenFileName(self, self.b_abet.text(), folder, "ABET XML (*.xml *.XML)")
+        if not path:
+            return
+        previous = previous if previous and Path(previous.path) == Path(path) else None
+        try:
+            dialog = AbetDialog(path, self.lang, self, previous, self.A.time if self.A is not None else None,
+                                standalone=self.current is None)
+        except (ValueError, OSError) as exc:
+            self.error(str(exc))
+            return
+        try:
+            if dialog.exec() == AbetDialog.Accepted and self.current is not None:
+                self.set_abet(dialog.config(), session=dialog.session)
+        finally:
+            dialog.deleteLater()
+
+    def remove_abet(self):
+        self.set_abet(AbetConfig(mode="disabled"))
+
+    def set_abet(self, spec, *, session=None):
+        if self._busy or self.current is None:
+            return
+        key = str(self.current.resolve())
+        raw = self.A
+        selected = self.cb_marker_use.currentText()
+
+        def apply(aligned):
+            self.cfg.abet_by_recording[key] = spec
+            if aligned is not None:
+                self.A = aligned
+                self.cfg.peth.marker = selected
+                self._refresh_marker_choices()
+                self.cfg.peth.marker = self.cb_marker_use.currentText()
+
+                def changed(label):
+                    if label not in aligned.markers or label not in raw.markers:
+                        return True
+                    return any(not np.array_equal(old.get(label, []), new.get(label, []), equal_nan=True)
+                               for old, new in ((raw.markers, aligned.markers),
+                                                (raw.marker_offsets, aligned.marker_offsets)))
+
+                if self.peth is not None and changed(self.peth.marker):
+                    self.peth = None
+                if self.stim_events is not None and changed(self.stim_events.attrs.get("marker")):
+                    self.stim_events = None
+            self.lbl_export.clear()
+            self.progress.reset()
+            self.redraw_all()
+            self._update_clear_buttons()
+            if self.lbl_abet.text():
+                self.log(self.lbl_abet.text())
+
+        if raw is None:
+            apply(None)
+        else:
+            self._run(lambda: attach_abet(raw, None if spec.mode == "disabled" else spec, session=session), apply)
 
     def pick_behavior_csv(self):
         if self.current is None or self._busy:
@@ -1451,6 +1581,21 @@ class MainWindow(QMainWindow):
         if d:
             self.out_dir.setText(d)
 
+    def pick_abet_manifest(self):
+        path, _ = QFileDialog.getOpenFileName(self, self.lbl_manifest.text(), "", "CSV (*.csv)")
+        if path:
+            self.abet_manifest.setText(path)
+
+    def save_abet_manifest_template(self):
+        from ..abet_batch import write_abet_manifest_template
+        path, _ = QFileDialog.getSaveFileName(self, self.b_manifest_template.text(), "abet_sync.csv", "CSV (*.csv)")
+        if path:
+            recordings = [self.file_list.item(i).data(Qt.UserRole) for i in range(self.file_list.count())]
+            try:
+                write_abet_manifest_template(path, recordings, self.cfg.abet_by_recording)
+            except (OSError, ValueError) as e:
+                self.error(str(e))
+
     def _out_root(self) -> Path | None:
         txt = self.out_dir.text().strip()
         if not txt:
@@ -1474,7 +1619,10 @@ class MainWindow(QMainWindow):
             if res.error:
                 self.error(res.error)
                 return
-            self.lbl_export.setText(self.t("export_done", path=res.out_dir))
+            msg = self.t("export_done", path=res.out_dir)
+            if "abet_mode" in res.summary:
+                msg += "\nABET · " + mode_label(res.summary["abet_mode"], self.lang)
+            self.lbl_export.setText(msg)
 
         self._run(lambda log, progress: run_file(path, cfg, out, log, progress), done, pass_callbacks=True)
 
@@ -1493,17 +1641,23 @@ class MainWindow(QMainWindow):
             configured[self.current] = cfg
         cfg = replace(cfg, channels=replace(cfg.channels, marker_file=""))  # auto-pair unvisited files
         paths = [self.file_list.item(i).data(Qt.UserRole) for i in range(n)]
+        manifest = self.abet_manifest.text().strip() or None
         self._stop = False
 
         def done(results):
             ok = sum(1 for r in results if not r.error)
             msg = self.t("batch_done", ok=ok, bad=len(results) - ok, path=out)
+            modes = [r.summary["abet_mode"] for r in results if not r.error and "abet_mode" in r.summary]
+            if modes:
+                counts = {mode: modes.count(mode) for mode in dict.fromkeys(modes)}
+                msg += "\nABET · " + ", ".join(f"{mode_label(mode, self.lang)} ({count})" for mode, count in counts.items())
             self.lbl_export.setText(msg)
             self.log(msg)
 
         source = self.current
         self._run(lambda log, progress: run_batch(paths, cfg, out, log, progress, lambda: self._stop,
-                                                  mapping_source=source, recording_configs=configured),
+                                                  mapping_source=source, recording_configs=configured,
+                                                  abet_manifest=manifest, retain_results=False),
                   done, pass_callbacks=True)
 
     def cancel(self):
@@ -1533,12 +1687,17 @@ class MainWindow(QMainWindow):
         for b in (self.b_read, self.b_pre, self.b_peth, self.b_events, self.b_export, self.b_batch):
             b.setEnabled(has and not self._busy)
         self.b_remove.setEnabled(has and not self._busy)
+        self.b_manifest_template.setEnabled(has and not self._busy)
         self.b_export_events.setEnabled(self.events is not None and not self._busy)
         self.b_cancel.setEnabled(self._busy)
         self.baseline_picker.refresh()
         self._update_clear_buttons()
 
     def _update_clear_buttons(self):
+        aligned = getattr(self.A, "abet", None)
+        self.b_abet_compare.setEnabled(self.B is not None and aligned is not None and
+                                       aligned.info["mode"] in ("offset", "affine", "assumed_trigger")
+                                       and not self._busy)
         ready = {"read": self.A is not None, "pre": self.B is not None,
                  "peth": self.peth is not None, "events": self.events is not None,
                  "export": bool(self.lbl_export.text()) or self.progress.value() >= 0}

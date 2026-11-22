@@ -1,4 +1,4 @@
-"""Identify and archive superseded outputs after removing a recording's last manual TTL."""
+"""Identify source-specific marker outputs superseded by a new analysis."""
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ TRIAL_PLOTS = {"02_dedrift_dataB", "03_deconv_events_dataC", "04_peth_heatmap_z"
                "05_auc_baseline_target", "05_peak_baseline_target", "07_event_rate_pre_post"}
 
 
-def marker_outputs(res, cfg, manual_only=False):
+def marker_outputs(res, cfg, manual_only=False, selected_labels=None):
     """Paths actually written by this run that may contain the selected markers."""
     out = res.out_dir
     outputs = set()
@@ -18,6 +18,8 @@ def marker_outputs(res, cfg, manual_only=False):
         outputs.add(out / f"{res.name}_dataA_markers.csv")
     outputs.update(p for p in res.figures if p.stem == "01_raw_dataA")
     if manual_only and res.summary.get("marker") != res.A.manual_ttl_label:
+        return outputs
+    if selected_labels is not None and res.summary.get("marker") not in selected_labels:
         return outputs
     if res.peth is not None:
         outputs.update(out / name for name in TRIAL_TABLES)
@@ -35,9 +37,9 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def superseded_manual_outputs(res, cfg):
+def _superseded_outputs(res, cfg, digest_key):
     report_file = res.out_dir / "analysis_methods.json"
-    if res.A.manual_ttl_label or not report_file.is_file():
+    if not report_file.is_file():
         return []
     try:
         report = json.loads(report_file.read_text(encoding="utf-8"))
@@ -46,11 +48,12 @@ def superseded_manual_outputs(res, cfg):
     source = str(Path(res.A.source).resolve())
     if not isinstance(report, dict) or report.get("recording") != source:
         return []
-    configured = report.get("configured_parameters")
-    manual = configured.get("manual_ttl_by_recording") if isinstance(configured, dict) else None
-    if not isinstance(manual, dict) or not manual.get(source):
-        return []
-    previous = report.get("manual_ttl_output_sha256", {})
+    if digest_key == "manual_ttl_output_sha256":
+        configured = report.get("configured_parameters")
+        manual = configured.get("manual_ttl_by_recording") if isinstance(configured, dict) else None
+        if res.A.manual_ttl_label or not isinstance(manual, dict) or not manual.get(source):
+            return []
+    previous = report.get(digest_key, {})
     if not isinstance(previous, dict) or not previous:
         return []
     # Construct candidates from known output names rather than treating report
@@ -70,8 +73,16 @@ def superseded_manual_outputs(res, cfg):
     return stale
 
 
-def archive_superseded(out, paths):
-    folder = Path(mkdtemp(prefix="previous-manual-ttl-", dir=out))
+def superseded_manual_outputs(res, cfg):
+    return _superseded_outputs(res, cfg, "manual_ttl_output_sha256")
+
+
+def superseded_abet_outputs(res, cfg):
+    return _superseded_outputs(res, cfg, "abet_marker_output_sha256")
+
+
+def archive_superseded(out, paths, prefix="previous-manual-ttl-"):
+    folder = Path(mkdtemp(prefix=prefix, dir=out))
     moved = []
     try:
         for src in paths:
