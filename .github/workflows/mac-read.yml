@@ -1,0 +1,34 @@
+name: Installed macOS data loading
+on:
+  push:
+    branches: [codex/mac-read, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read:
+    runs-on: macos-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load TDMS and Plexon through the packaged Cocoa window
+        env:
+          QT_QPA_PLATFORM: cocoa
+          PYTHONFAULTHANDLER: '1'
+        run: |
+          set -eu
+          sysctl -n machdep.cpu.brand_string
+          export HOME="$RUNNER_TEMP/read-home" READ_QA="$RUNNER_TEMP/read-data"
+          mkdir -p "$HOME" "$READ_QA"
+          base=0.6.0
+          tag=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/fiberphoto/__init__.py)
+          payload="$HOME/Library/Application Support/FiberLume/patches/$base/$tag"
+          mkdir -p "$payload"
+          cp -R src/fiberphoto "$payload/"
+          python3 packaging/check_mac_read.py "$payload"
+          mount="$RUNNER_TEMP/fiberlume"
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/v$base/FiberLume-$base-macOS-AppleSilicon.dmg" -o "$RUNNER_TEMP/base.dmg"
+          hdiutil attach "$RUNNER_TEMP/base.dmg" -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          "$mount/FiberLume.app/Contents/MacOS/fiberphoto"
+          test "$(cat "$READ_QA/gui-ok")" = "$tag"
